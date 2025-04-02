@@ -138,6 +138,7 @@ io.use(verifyTokenSocket);
 io.on("connection", async (socket) => {
   console.log("User connected with ID:", socket.userId);
 
+  // Verify user profile
   const profile = await Profile.findOne({ userId: socket.userId });
   if (!profile || !profile.profileCompleted) {
     console.log("Profile incomplete or missing for user:", socket.userId);
@@ -148,24 +149,56 @@ io.on("connection", async (socket) => {
 
   const userData = { socket, userId: socket.userId };
 
-  // Function to pair users
+  // Helper function to get current session ID
+  const getSessionIdFromRooms = () => {
+    const rooms = Array.from(socket.rooms);
+    return rooms.find((room) => room !== socket.id) || null;
+  };
+
+  // Helper function to leave current session
+  const leaveCurrentSession = () => {
+    const sessionId = getSessionIdFromRooms();
+    if (sessionId) {
+      socket.leave(sessionId);
+      io.to(sessionId).emit("partner_left", { message: "Stranger disconnected" });
+      console.log("User", socket.userId, "left session:", sessionId);
+    }
+  };
+
+  // Pairing logic
   const pairUser = () => {
+    // Ensure user isn't in any previous session
+    leaveCurrentSession();
+
+    // Remove user from waiting list if already present (prevent duplicates)
+    waitingUsers = waitingUsers.filter((u) => u.userId !== socket.userId);
+
     if (waitingUsers.length > 0) {
       const match = waitingUsers.shift();
       if (match.userId !== socket.userId) {
-        const sessionId = `${socket.userId}-${match.userId}`;
+        // Create a unique session ID with timestamp to avoid conflicts
+        const sessionId = `${socket.userId}-${match.userId}-${Date.now()}`;
+        
+        // Ensure match leaves any previous session
+        match.socket.leave(getSessionIdFromRooms.call(match.socket));
+        
+        // Join both users to the new session
         socket.join(sessionId);
         match.socket.join(sessionId);
+
+        // Notify both users of pairing
         io.to(sessionId).emit("paired", {
           message: "Connected with a stranger!",
           sessionId,
         });
         console.log("Paired users in session:", sessionId);
       } else {
-        waitingUsers.push(match); // Put back if it’s the same user
+        // If matched with self (shouldn't happen), re-queue
+        waitingUsers.push(match);
         socket.emit("waiting", { message: "Waiting for a stranger..." });
       }
     } else {
+      // Add user to waiting list
       waitingUsers.push(userData);
       socket.emit("waiting", { message: "Waiting for a stranger..." });
       console.log("User", socket.userId, "added to queue. Queue length:", waitingUsers.length);
@@ -175,10 +208,9 @@ io.on("connection", async (socket) => {
   // Initial pairing attempt
   pairUser();
 
-  // Text message handling
+  // Handle text messages
   socket.on("message", (data) => {
-    const rooms = Array.from(socket.rooms);
-    const sessionId = rooms.find((room) => room !== socket.id);
+    const sessionId = getSessionIdFromRooms();
     if (sessionId) {
       socket.to(sessionId).emit("message", { text: data.text, from: "stranger" });
       console.log("Message sent to session", sessionId, ":", data.text);
@@ -187,39 +219,38 @@ io.on("connection", async (socket) => {
     }
   });
 
-  // WebRTC signaling for video
+  // WebRTC signaling: Offer
   socket.on("offer", (data) => {
     const { offer, sessionId } = data;
-    const effectiveSessionId = sessionId || getSessionIdFromRooms(socket);
-    if (!effectiveSessionId) {
-      console.error("No valid sessionId provided with offer from user", socket.userId);
+    if (!sessionId || !socket.rooms.has(sessionId)) {
+      console.error("Invalid sessionId for offer from user", socket.userId);
       return;
     }
-    socket.to(effectiveSessionId).emit("offer", { offer, from: socket.userId, sessionId: effectiveSessionId });
-    console.log("Offer emitted to session", effectiveSessionId);
+    socket.to(sessionId).emit("offer", { offer, from: socket.userId, sessionId });
+    console.log("Offer emitted to session", sessionId);
   });
 
+  // WebRTC signaling: Answer
   socket.on("answer", (data) => {
     const { answer, sessionId } = data;
-    const effectiveSessionId = sessionId || getSessionIdFromRooms(socket);
-    if (!effectiveSessionId) {
-      console.error("No valid sessionId provided with answer from user", socket.userId);
+    if (!sessionId || !socket.rooms.has(sessionId)) {
+      console.error("Invalid sessionId for answer from user", socket.userId);
       return;
     }
-    socket.to(effectiveSessionId).emit("answer", { answer, from: socket.userId, sessionId: effectiveSessionId });
-    console.log("Answer emitted to session", effectiveSessionId);
+    socket.to(sessionId).emit("answer", { answer, from: socket.userId, sessionId });
+    console.log("Answer emitted to session", sessionId);
   });
 
+  // WebRTC signaling: ICE Candidate
   socket.on("ice-candidate", (data) => {
     const { candidate, sessionId } = data;
-    const effectiveSessionId = sessionId || getSessionIdFromRooms(socket);
-    if (!effectiveSessionId) {
-      console.error("No valid sessionId provided with ICE candidate from user", socket.userId);
+    if (!sessionId || !socket.rooms.has(sessionId)) {
+      console.error("Invalid sessionId for ICE candidate from user", socket.userId);
       return;
     }
     if (candidate) {
-      socket.to(effectiveSessionId).emit("ice-candidate", { candidate, from: socket.userId, sessionId: effectiveSessionId });
-      console.log("ICE candidate emitted to session", effectiveSessionId);
+      socket.to(sessionId).emit("ice-candidate", { candidate, from: socket.userId, sessionId });
+      console.log("ICE candidate emitted to session", sessionId);
     }
   });
 
@@ -227,49 +258,29 @@ io.on("connection", async (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnecting with ID:", socket.userId);
     waitingUsers = waitingUsers.filter((u) => u.userId !== socket.userId);
-    const rooms = Array.from(socket.rooms);
-    const sessionId = rooms.find((room) => room !== socket.id);
-    if (sessionId) {
-      io.to(sessionId).emit("partner_left", {
-        message: "Stranger disconnected, finding a new chat...",
-      });
-      io.in(sessionId).socketsLeave(sessionId);
-      console.log("Notified partner in session", sessionId, "of disconnect");
-    }
+    leaveCurrentSession();
     console.log("Updated queue length after disconnect:", waitingUsers.length);
   });
 
-  // Next chat request with delay
+  // Handle "next" request
   socket.on("next", () => {
     console.log("User", socket.userId, "requested next chat");
-    const rooms = Array.from(socket.rooms);
-    const sessionId = rooms.find((room) => room !== socket.id);
+    
+    // Clean up current session
+    leaveCurrentSession();
 
-    if (sessionId) {
-      // Notify all users in the session and force them to leave
-      io.to(sessionId).emit("partner_left", { message: "Stranger left, finding a new chat..." });
-      io.in(sessionId).socketsLeave(sessionId);
-      console.log("Session", sessionId, "ended for all users");
-    }
-
-    // Remove user from waiting queue if present and re-queue
+    // Remove from waiting list and re-queue
     waitingUsers = waitingUsers.filter((u) => u.userId !== socket.userId);
     waitingUsers.push(userData);
     socket.emit("waiting", { message: "Looking for a new stranger..." });
     console.log("User", socket.userId, "re-queued. Queue length:", waitingUsers.length);
 
-    // Delay pairing to allow cleanup
+    // Delay pairing to ensure cleanup
     setTimeout(() => {
       pairUser();
-    }, 1500); // Increased to 1.5 seconds for reliable cleanup
+    }, 1500); // 1.5-second delay for reliable cleanup
   });
-}); 
-
-// Helper function to get sessionId from socket rooms
-function getSessionIdFromRooms(socket) {
-  const rooms = Array.from(socket.rooms);
-  return rooms.find((room) => room !== socket.id) || null;
-}
+});
 
 // Routes
 app.post("/register", async (req, res) => {

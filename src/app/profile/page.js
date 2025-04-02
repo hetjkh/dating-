@@ -285,7 +285,7 @@ const ProfileQuestionnaire = () => {
   useEffect(() => {
     const fetchProfile = async () => {
       try {
-        const response = await fetch("http://192.168.1.8:5000/user/profile", {
+        const response = await fetch("http://localhost:5000/user/profile", {
           credentials: "include",
         });
         const data = await response.json();
