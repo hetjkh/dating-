@@ -285,7 +285,7 @@ const ProfileQuestionnaire = () => {
   useEffect(() => {
     const fetchProfile = async () => {
       try {
-        const response = await fetch("https://dating-backend.onrender.comser/profile", {
+        const response = await fetch("https://dating-backend-1h4q.onrender.com/user/profile", {
           credentials: "include",
         });
         const data = await response.json();
@@ -389,7 +389,7 @@ const ProfileQuestionnaire = () => {
         }
       });
 
-      const response = await fetch("https://dating-backend.onrender.com/user/profile", {
+      const response = await fetch("https://dating-backend-1h4q.onrender.com/user/profile", {
         method: "POST",
         credentials: "include",
         body: formData,
