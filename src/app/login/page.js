@@ -130,7 +130,7 @@ export default function LoginPage() {
           <Button 
             variant="outline" 
             className="w-full"
-            onClick={() => window.location.href = "http://localhost:5000/auth/google"}
+            onClick={() => window.location.href = "https://dating-backend.onrender.com/auth/google"}
             disabled={isLoading}
           >
             <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
