@@ -1,6 +1,5 @@
 "use client";
 
-
 import React, { useState, useEffect, useRef } from "react";
 import io from "socket.io-client";
 
@@ -16,6 +15,21 @@ const Chat = () => {
   const iceCandidatesQueueRef = useRef([]);
   const localStreamRef = useRef(null);
   const currentSessionIdRef = useRef(null);
+  // Add ref to track if play() is pending
+  const isPlayingRef = useRef({ local: false, remote: false });
+
+  // Utility to safely play a video
+  const safePlay = async (videoRef, type) => {
+    if (!videoRef.current || isPlayingRef.current[type]) return;
+    try {
+      isPlayingRef.current[type] = true;
+      await videoRef.current.play();
+    } catch (error) {
+      console.error(`Error playing ${type} video:`, error);
+    } finally {
+      isPlayingRef.current[type] = false;
+    }
+  };
 
   // Initialize local video stream
   useEffect(() => {
@@ -28,7 +42,7 @@ const Chat = () => {
         localStreamRef.current = stream;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
-          localVideoRef.current.play().catch((e) => console.error("Error playing local video:", e));
+          await safePlay(localVideoRef, "local");
         }
       } catch (error) {
         console.error("Error initializing local video:", error);
@@ -179,8 +193,11 @@ const Chat = () => {
 
     pc.ontrack = (event) => {
       if (remoteVideoRef.current && event.streams[0] && currentSessionIdRef.current === sessionId) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteVideoRef.current.play().catch((e) => console.error("Error playing remote video:", e));
+        // Only assign srcObject if it's different to avoid unnecessary reassignment
+        if (remoteVideoRef.current.srcObject !== event.streams[0]) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+          safePlay(remoteVideoRef, "remote");
+        }
         setStatus("Connected");
       }
     };
@@ -238,7 +255,7 @@ const Chat = () => {
         localStreamRef.current = stream;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
-          localVideoRef.current.play().catch((e) => console.error("Error playing local video:", e));
+          await safePlay(localVideoRef, "local");
         }
       }
 
@@ -280,6 +297,7 @@ const Chat = () => {
     // Clear remote video
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
+      isPlayingRef.current.remote = false;
     }
 
     // Clear ICE candidate queue
@@ -317,7 +335,7 @@ const Chat = () => {
           localStreamRef.current = stream;
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
-            localVideoRef.current.play().catch((e) => console.error("Error replaying local video:", e));
+            await safePlay(localVideoRef, "local");
           }
         } catch (error) {
           console.error("Error reinitializing local stream:", error);
