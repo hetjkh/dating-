@@ -7,8 +7,9 @@ const Chat = () => {
   const [socket, setSocket] = useState(null);
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([]);
-  const [status, setStatus] = useState("Disconnected");
+  const [status, setStatus] = useState("Click Start to begin");
   const [sessionId, setSessionId] = useState(null);
+  const [isStarted, setIsStarted] = useState(false);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -16,38 +17,7 @@ const Chat = () => {
   const localStreamRef = useRef(null);
   const currentSessionIdRef = useRef(null);
 
-  // Initialize local video stream
-  useEffect(() => {
-    const startLocalVideo = async () => {
-      try {
-        if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach(track => track.stop());
-        }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-        localStreamRef.current = stream;
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-          await localVideoRef.current.play().catch(e => console.error("Error playing local video:", e));
-        }
-      } catch (error) {
-        console.error("Error initializing local video:", error);
-        setStatus("Camera access failed: " + error.message);
-      }
-    };
-    startLocalVideo();
-
-    return () => {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-        localStreamRef.current = null;
-      }
-    };
-  }, []);
-
-  // Socket.IO and WebRTC setup
+  // Initialize socket connection
   useEffect(() => {
     const newSocket = io("https://dating-backend-1h4q.onrender.com", {
       withCredentials: true,
@@ -58,13 +28,15 @@ const Chat = () => {
 
     newSocket.on("connect", () => {
       console.log("Socket connected");
-      setStatus("Looking for a stranger...");
+      if (isStarted) {
+        setStatus("Looking for a stranger...");
+      }
     });
 
     newSocket.on("disconnect", () => {
       console.log("Socket disconnected");
       setStatus("Disconnected - trying to reconnect...");
-      stopVideoCall();
+      cleanupVideoCall();
     });
 
     newSocket.on("waiting", ({ message }) => {
@@ -73,18 +45,21 @@ const Chat = () => {
       setChat([]);
       setSessionId(null);
       currentSessionIdRef.current = null;
-      stopVideoCall();
+      cleanupVideoCall();
     });
 
     newSocket.on("paired", async ({ message, sessionId: newSessionId }) => {
       console.log("Paired with new session:", newSessionId);
-      await stopVideoCall();
+      await cleanupVideoCall();
       setSessionId(newSessionId);
       currentSessionIdRef.current = newSessionId;
       setStatus("Connecting video...");
       setChat([]);
       
-      // Delay starting the video call slightly to ensure clean state
+      // Ensure we have local stream before starting
+      await ensureLocalStream();
+      
+      // Delay starting the video call
       setTimeout(() => {
         startVideoCall(newSocket, newSessionId);
       }, 1000);
@@ -100,7 +75,7 @@ const Chat = () => {
       setChat([]);
       setSessionId(null);
       currentSessionIdRef.current = null;
-      stopVideoCall();
+      cleanupVideoCall();
     });
 
     newSocket.on("offer", async ({ offer, sessionId: offerSessionId }) => {
@@ -111,7 +86,9 @@ const Chat = () => {
       }
 
       try {
-        await stopVideoCall();
+        await cleanupVideoCall();
+        await ensureLocalStream();
+        
         const pc = createPeerConnection(newSocket, offerSessionId);
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
@@ -126,14 +103,18 @@ const Chat = () => {
 
     newSocket.on("answer", async ({ answer, sessionId: answerSessionId }) => {
       console.log("Received answer for session:", answerSessionId);
-      if (answerSessionId !== currentSessionIdRef.current || !peerConnectionRef.current) {
-        console.warn("Ignoring answer for wrong session");
+      if (!peerConnectionRef.current || answerSessionId !== currentSessionIdRef.current) {
+        console.warn("Ignoring answer - wrong session or no connection");
         return;
       }
 
       try {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-        processQueuedIceCandidates();
+        if (peerConnectionRef.current.signalingState === "have-local-offer") {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+          processQueuedIceCandidates();
+        } else {
+          console.warn("Peer connection in wrong state:", peerConnectionRef.current.signalingState);
+        }
       } catch (error) {
         console.error("Error handling answer:", error);
         setStatus("Video connection failed - try next match");
@@ -161,10 +142,30 @@ const Chat = () => {
     setSocket(newSocket);
 
     return () => {
-      stopVideoCall();
+      cleanupVideoCall();
       newSocket.disconnect();
     };
-  }, []);
+  }, [isStarted]);
+
+  const ensureLocalStream = async () => {
+    if (!localStreamRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: true 
+        });
+        localStreamRef.current = stream;
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+          await localVideoRef.current.play().catch(console.error);
+        }
+      } catch (error) {
+        console.error("Error getting local stream:", error);
+        setStatus("Camera access failed - please check permissions");
+        throw error;
+      }
+    }
+  };
 
   const createPeerConnection = (socket, sessionId) => {
     console.log("Creating new peer connection");
@@ -189,6 +190,7 @@ const Chat = () => {
       console.log("ICE connection state:", pc.iceConnectionState);
       switch (pc.iceConnectionState) {
         case "connected":
+        case "completed":
           setStatus("Connected");
           break;
         case "disconnected":
@@ -206,14 +208,16 @@ const Chat = () => {
     pc.ontrack = (event) => {
       console.log("Received remote track");
       if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteVideoRef.current.play().catch(e => {
-          console.error("Error playing remote video:", e);
-          // Retry playing after a short delay
-          setTimeout(() => {
-            remoteVideoRef.current?.play().catch(console.error);
-          }, 1000);
-        });
+        const [remoteStream] = event.streams;
+        if (remoteVideoRef.current.srcObject !== remoteStream) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          remoteVideoRef.current.play().catch(e => {
+            console.error("Error playing remote video:", e);
+            setTimeout(() => {
+              remoteVideoRef.current?.play().catch(console.error);
+            }, 1000);
+          });
+        }
       }
     };
 
@@ -241,12 +245,7 @@ const Chat = () => {
   const startVideoCall = async (socket, sessionId) => {
     console.log("Starting video call for session:", sessionId);
     try {
-      if (!localStreamRef.current) {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localStreamRef.current = stream;
-        localVideoRef.current.srcObject = stream;
-      }
-
+      await ensureLocalStream();
       const pc = createPeerConnection(socket, sessionId);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -257,8 +256,10 @@ const Chat = () => {
     }
   };
 
-  const stopVideoCall = async () => {
-    console.log("Stopping video call");
+  const cleanupVideoCall = async () => {
+    console.log("Cleaning up video call");
+    
+    // Close and cleanup peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.ontrack = null;
       peerConnectionRef.current.onicecandidate = null;
@@ -267,22 +268,50 @@ const Chat = () => {
       peerConnectionRef.current = null;
     }
 
+    // Clear remote video
     if (remoteVideoRef.current) {
+      const stream = remoteVideoRef.current.srcObject;
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
       remoteVideoRef.current.srcObject = null;
     }
 
+    // Clear ICE candidates queue
     iceCandidatesQueueRef.current = [];
   };
 
+  const handleStart = async () => {
+    try {
+      setIsStarted(true);
+      setStatus("Starting camera...");
+      await ensureLocalStream();
+      if (socket) {
+        setStatus("Looking for a stranger...");
+        socket.emit("next");
+      }
+    } catch (error) {
+      console.error("Failed to start:", error);
+      setStatus("Failed to start - please check camera permissions");
+    }
+  };
+
   const nextChat = async () => {
+    if (!socket || !isStarted) return;
+    
     console.log("Requesting next chat");
-    if (socket) {
-      setStatus("Looking for new match...");
-      await stopVideoCall();
-      setSessionId(null);
-      currentSessionIdRef.current = null;
-      setChat([]);
+    setStatus("Looking for new match...");
+    await cleanupVideoCall();
+    setSessionId(null);
+    currentSessionIdRef.current = null;
+    setChat([]);
+    
+    try {
+      await ensureLocalStream();
       socket.emit("next");
+    } catch (error) {
+      console.error("Failed to prepare for next chat:", error);
+      setStatus("Failed to access camera - please refresh");
     }
   };
 
@@ -339,26 +368,37 @@ const Chat = () => {
       </div>
 
       <div className="flex gap-4">
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Type a message..."
-          className="flex-1 p-2 border rounded"
-          onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-        />
-        <button
-          onClick={sendMessage}
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-        >
-          Send
-        </button>
-        <button
-          onClick={nextChat}
-          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-        >
-          Next Stranger
-        </button>
+        {!isStarted ? (
+          <button
+            onClick={handleStart}
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 w-full"
+          >
+            Start Chat
+          </button>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Type a message..."
+              className="flex-1 p-2 border rounded"
+              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+            />
+            <button
+              onClick={sendMessage}
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            >
+              Send
+            </button>
+            <button
+              onClick={nextChat}
+              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+            >
+              Next Stranger
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
