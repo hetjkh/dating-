@@ -22,7 +22,7 @@ const Chat = () => {
   const initializeSocket = () => {
     if (socket) return socket; // Return existing socket if already created
 
-    const newSocket = io("http://localhost:5000", {
+    const newSocket = io("https://dating-backend-1h4q.onrender.com", {
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 5,
