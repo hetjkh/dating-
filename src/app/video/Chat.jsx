@@ -1,32 +1,24 @@
-// https://dating-backend-1h4q.onrender.com
+"use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Socket, io } from "socket.io-client";
+import io from "socket.io-client";
 
-interface ChatMessage {
-  from: string;
-  text: string;
-}
-
-const Chat: React.FC = () => {
-  const [socket, setSocket] = useState<Socket | null>(null);
+const Chat = () => {
+  const [socket, setSocket] = useState(null);
   const [message, setMessage] = useState("");
-  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [chat, setChat] = useState([]);
   const [status, setStatus] = useState("Click Start to begin");
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState(null);
   const [isStarted, setIsStarted] = useState(false);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const iceCandidatesQueueRef = useRef<RTCIceCandidate[]>([]);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const currentSessionIdRef = useRef<string | null>(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const iceCandidatesQueueRef = useRef([]);
+  const localStreamRef = useRef(null);
+  const currentSessionIdRef = useRef(null);
 
+  // Initialize socket connection
   useEffect(() => {
-    if (!isStarted) return;
-
-    setStatus("Initializing connection...");
-    
     const newSocket = io("https://dating-backend-1h4q.onrender.com", {
       withCredentials: true,
       reconnection: true,
@@ -36,7 +28,9 @@ const Chat: React.FC = () => {
 
     newSocket.on("connect", () => {
       console.log("Socket connected");
-      setStatus("Looking for a stranger...");
+      if (isStarted) {
+        setStatus("Looking for a stranger...");
+      }
     });
 
     newSocket.on("disconnect", () => {
@@ -62,8 +56,10 @@ const Chat: React.FC = () => {
       setStatus("Connecting video...");
       setChat([]);
       
+      // Ensure we have local stream before starting
       await ensureLocalStream();
       
+      // Delay starting the video call
       setTimeout(() => {
         startVideoCall(newSocket, newSessionId);
       }, 1000);
@@ -148,7 +144,6 @@ const Chat: React.FC = () => {
     return () => {
       cleanupVideoCall();
       newSocket.disconnect();
-      console.log("Socket disconnected due to cleanup");
     };
   }, [isStarted]);
 
@@ -172,7 +167,7 @@ const Chat: React.FC = () => {
     }
   };
 
-  const createPeerConnection = (socket: Socket, sessionId: string) => {
+  const createPeerConnection = (socket, sessionId) => {
     console.log("Creating new peer connection");
     const pc = new RTCPeerConnection({
       iceServers: [
@@ -226,9 +221,10 @@ const Chat: React.FC = () => {
       }
     };
 
+    // Add local tracks to the connection
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current!);
+        pc.addTrack(track, localStreamRef.current);
       });
     }
 
@@ -239,14 +235,14 @@ const Chat: React.FC = () => {
   const processQueuedIceCandidates = () => {
     if (peerConnectionRef.current?.remoteDescription) {
       iceCandidatesQueueRef.current.forEach(candidate => {
-        peerConnectionRef.current!.addIceCandidate(candidate)
+        peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate))
           .catch(error => console.error("Error processing queued candidate:", error));
       });
       iceCandidatesQueueRef.current = [];
     }
   };
 
-  const startVideoCall = async (socket: Socket, sessionId: string) => {
+  const startVideoCall = async (socket, sessionId) => {
     console.log("Starting video call for session:", sessionId);
     try {
       await ensureLocalStream();
@@ -263,6 +259,7 @@ const Chat: React.FC = () => {
   const cleanupVideoCall = async () => {
     console.log("Cleaning up video call");
     
+    // Close and cleanup peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.ontrack = null;
       peerConnectionRef.current.onicecandidate = null;
@@ -271,22 +268,28 @@ const Chat: React.FC = () => {
       peerConnectionRef.current = null;
     }
 
+    // Clear remote video
     if (remoteVideoRef.current) {
-      const stream = remoteVideoRef.current.srcObject as MediaStream | null;
+      const stream = remoteVideoRef.current.srcObject;
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
       remoteVideoRef.current.srcObject = null;
     }
 
+    // Clear ICE candidates queue
     iceCandidatesQueueRef.current = [];
   };
 
   const handleStart = async () => {
     try {
+      setIsStarted(true);
       setStatus("Starting camera...");
       await ensureLocalStream();
-      setIsStarted(true);
+      if (socket) {
+        setStatus("Looking for a stranger...");
+        socket.emit("next");
+      }
     } catch (error) {
       console.error("Failed to start:", error);
       setStatus("Failed to start - please check camera permissions");
@@ -324,13 +327,8 @@ const Chat: React.FC = () => {
     <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-2">Random Video Chat</h1>
-        <div className={`p-3 rounded-md ${
-          status.includes("Connected") ? "bg-green-100 text-green-800" :
-          status.includes("failed") ? "bg-red-100 text-red-800" :
-          status.includes("Looking") ? "bg-yellow-100 text-yellow-800" :
-          "bg-blue-100 text-blue-800"
-        }`}>
-          <p className="font-semibold">{status}</p>
+        <div className="bg-blue-100 p-3 rounded">
+          <p className="font-semibold">Status: {status}</p>
         </div>
       </div>
 
@@ -342,7 +340,7 @@ const Chat: React.FC = () => {
             autoPlay
             playsInline
             muted
-            className="w-full h-64 bg-black rounded-lg object-cover"
+            className="w-full bg-black rounded-lg"
           />
         </div>
         <div className="space-y-2">
@@ -351,7 +349,7 @@ const Chat: React.FC = () => {
             ref={remoteVideoRef}
             autoPlay
             playsInline
-            className="w-full h-64 bg-black rounded-lg object-cover"
+            className="w-full bg-black rounded-lg"
           />
         </div>
       </div>
@@ -361,12 +359,10 @@ const Chat: React.FC = () => {
           <div
             key={idx}
             className={`mb-2 p-2 rounded ${
-              msg.from === "me" 
-                ? "bg-blue-100 text-blue-900 ml-auto" 
-                : "bg-white"
-            } max-w-[80%] transition-all duration-200 ease-in-out`}
+              msg.from === "me" ? "bg-blue-100 ml-auto" : "bg-white"
+            } max-w-[80%]`}
           >
-            <strong>{msg.from === "me" ? "You" : "Stranger"}:</strong> {msg.text}
+            <strong>{msg.from}:</strong> {msg.text}
           </div>
         ))}
       </div>
@@ -375,7 +371,7 @@ const Chat: React.FC = () => {
         {!isStarted ? (
           <button
             onClick={handleStart}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 focus:ring-2 focus:ring-blue-300 focus:outline-none transition-colors duration-200 w-full"
+            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 w-full"
           >
             Start Chat
           </button>
@@ -385,19 +381,19 @@ const Chat: React.FC = () => {
               type="text"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
               placeholder="Type a message..."
-              className="flex-1 px-4 py-2 border rounded focus:ring-2 focus:ring-blue-300 focus:outline-none"
+              className="flex-1 p-2 border rounded"
+              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
             />
             <button
               onClick={sendMessage}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 focus:ring-2 focus:ring-blue-300 focus:outline-none transition-colors duration-200"
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
             >
               Send
             </button>
             <button
               onClick={nextChat}
-              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 focus:ring-2 focus:ring-green-300 focus:outline-none transition-colors duration-200"
+              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
             >
               Next Stranger
             </button>
