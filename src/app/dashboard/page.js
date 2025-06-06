@@ -6,8 +6,8 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { HeartIcon, MessageCircle, Video, Shield, UserCheck, Zap, Gift, Camera, Mic, Users, Moon, Sun } from "lucide-react"
-import { motion } from "framer-motion" // Added for animations
+import { HeartIcon, MessageCircle, Video, Shield, UserCheck, Zap, Camera, Mic, Users, Moon, Sun, Star } from "lucide-react"
+import { motion } from "framer-motion"
 
 export default function LandingPage() {
   const [user, setUser] = useState(null)
@@ -95,10 +95,10 @@ export default function LandingPage() {
           </div>
 
           <div className="hidden space-x-8 md:flex">
-            {["Features", "Plans", "Trust System", "About"].map((item, i) => (
+            {["Chats", "Video", "Profile", "Subscription"].map((item, i) => (
               <motion.a
                 key={i}
-                href={`#${item.toLowerCase().replace(" ", "-")}`}
+                href={`/${item.toLowerCase()}`}
                 className="text-xl font-bold hover:text-red-500 transition-colors transform hover:rotate-2"
                 style={{textDecoration: "", textDecorationThickness: "3px", textUnderlineOffset: "4px"}}
                 whileHover={{ scale: 1.1 }}
@@ -115,16 +115,31 @@ export default function LandingPage() {
             ) : user ? (
               <>
                 <div className="flex items-center mr-2">
-                  <motion.div 
-                    className="w-10 h-10 rounded-md bg-cyan-300 border-4 border-black flex items-center justify-center font-black transform rotate-3"
+                  <motion.div
+                    className="w-10 h-10 rounded-full border-4 border-black flex items-center justify-center font-black transform rotate-3 overflow-hidden"
                     whileHover={{ rotate: 6 }}
                   >
-                    {user.name?.charAt(0).toUpperCase()}
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt="Profile avatar"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.src = "/default-avatar.png";
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src="/default-avatar.png"
+                        alt="Default avatar"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
                   </motion.div>
                   <span className="ml-2 font-black">{user.name}</span>
                 </div>
-                <Button 
-                  onClick={handleLogout} 
+                <Button
+                  onClick={handleLogout}
                   className={`${darkMode ? "bg-blue-600 hover:bg-blue-700" : "bg-blue-300 hover:bg-blue-400"} text-black font-black border-4 border-black px-4 py-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all`}
                 >
                   Logout
@@ -138,8 +153,8 @@ export default function LandingPage() {
                 >
                   Login
                 </Button>
-                <Button 
-                  onClick={() => router.push("/register")} 
+                <Button
+                  onClick={() => router.push("/register")}
                   className={`${darkMode ? "bg-red-600 hover:bg-red-700" : "bg-red-300 hover:bg-red-400"} text-black font-black border-4 border-black px-4 py-2 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all transform rotate-1`}
                 >
                   Sign Up
@@ -189,7 +204,7 @@ export default function LandingPage() {
                   Get Started
                 </motion.button>
                 <motion.button
-                  onClick={() => router.push("#features")}
+                  onClick={() => router.push("/chats")}
                   className={`${darkMode ? "bg-purple-600 hover:bg-purple-700" : "bg-purple-300 hover:bg-purple-400"} text-black font-black border-4 border-black px-6 py-3 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[4px] hover:translate-y-[4px] transition-all transform -rotate-1 text-xl`}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -479,9 +494,9 @@ export default function LandingPage() {
         </div>
       </motion.section>
 
-      {/* Subscription Plans */}
+      {/* Reviews Section */}
       <motion.section 
-        id="plans" 
+        id="reviews" 
         className={`py-16 ${darkMode ? "bg-gray-800" : "bg-purple-100"} border-b-8 border-black`}
         initial="hidden"
         whileInView="visible"
@@ -496,7 +511,7 @@ export default function LandingPage() {
             animate={{ scale: 1 }}
             transition={{ duration: 0.8, type: "spring" }}
           >
-            Subscription Plans
+            What Our Users Say
           </motion.h2>
           <motion.p 
             className={`text-center font-bold max-w-2xl mx-auto mb-12 ${darkMode ? "bg-gray-700" : "bg-white"} p-4 border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transform rotate-1`}
@@ -504,58 +519,33 @@ export default function LandingPage() {
             animate={{ opacity: 1 }}
             transition={{ delay: 0.3 }}
           >
-            Choose the plan that fits your dating journey
+            Hear from real users who found love and connection on HeartSync
           </motion.p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[
               {
-                name: "Free Plan",
-                price: "$0",
-                description: "Perfect for getting started",
-                features: [
-                  "Basic profile creation",
-                  "Limited swipes per day",
-                  "Access to basic chat",
-                  "No priority matching",
-                ],
-                buttonText: "Current Plan",
-                buttonColor: darkMode ? "bg-gray-600" : "bg-gray-300",
-                rotate: "-rotate-1",
-                bg: darkMode ? "bg-gray-700" : "bg-white"
+                name: "Alex & Jamie",
+                rating: 5,
+                review: "We met through HeartSync's video chat and instantly clicked. The trust system made us feel safe to connect authentically!",
+                bg: darkMode ? "bg-pink-600" : "bg-pink-300",
+                rotate: "rotate-2"
               },
               {
-                name: "Silver Plan",
-                price: "$14.99",
-                description: "Enhanced features and visibility",
-                features: [
-                  "Everything in Free plan",
-                  "Unlimited swipes",
-                  "Profile boosting (1x/week)",
-                  "See who liked you",
-                ],
-                buttonText: "Upgrade Now",
-                buttonColor: darkMode ? "bg-pink-600" : "bg-pink-300",
-                rotate: "rotate-2",
-                bg: darkMode ? "bg-pink-800" : "bg-pink-100",
-                popular: true
+                name: "Sam",
+                rating: 4,
+                review: "The smart swipe system helped me find people who share my interests. I love the themed group chats!",
+                bg: darkMode ? "bg-blue-600" : "bg-blue-300",
+                rotate: "-rotate-1"
               },
               {
-                name: "Gold Plan",
-                price: "$29.99",
-                description: "Premium experience",
-                features: [
-                  "Everything in Silver plan",
-                  "Priority matching",
-                  "Daily profile boost",
-                  "VIP video chat rooms",
-                ],
-                buttonText: "Go Premium",
-                buttonColor: darkMode ? "bg-yellow-600" : "bg-yellow-300",
-                rotate: "-rotate-1",
-                bg: darkMode ? "bg-yellow-800" : "bg-yellow-100"
+                name: "Taylor",
+                rating: 5,
+                review: "HeartSync's profile video intros made it so much easier to find genuine connections. Highly recommend!",
+                bg: darkMode ? "bg-green-600" : "bg-green-300",
+                rotate: "rotate-1"
               },
-            ].map((plan, index) => (
+            ].map((review, index) => (
               <motion.div 
                 key={index}
                 initial={{ opacity: 0, y: 50 }}
@@ -563,72 +553,25 @@ export default function LandingPage() {
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.2 }}
               >
-                <Card
-                  className={`${plan.bg} border-8 ${plan.popular ? "border-red-500" : "border-black"} shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transform ${plan.rotate} relative`}
-                >
-                  {plan.popular && (
-                    <motion.div 
-                      className="absolute top-0 right-0 transform translate-x-2 -translate-y-6 rotate-6"
-                      animate={{ y: [0, -10, 0] }}
-                      transition={{ duration: 1.5, repeat: Infinity }}
-                    >
-                      <Badge className="bg-red-400 text-black font-black px-4 py-2 border-4 border-black">Most Popular</Badge>
-                    </motion.div>
-                  )}
-                  <CardContent className="p-0">
-                    <div className="p-6 border-b-8 border-black">
-                      <h3 className="text-2xl font-black mb-2">{plan.name}</h3>
-                      <p className="font-bold mb-4">{plan.description}</p>
-                      <div className="flex items-baseline">
-                        <span className="text-4xl font-black" style={{textShadow: "2px 2px 0px #FCD34D"}}>{plan.price}</span>
-                        <span className="font-bold ml-1">/month</span>
-                      </div>
-                    </div>
-                    <div className="p-6">
-                      <ul className="space-y-3">
-                        {plan.features.map((feature, featureIndex) => (
-                          <motion.li 
-                            key={featureIndex} 
-                            className="flex items-center"
-                            whileHover={{ x: 5 }}
-                          >
-                            <div 
-                              className={`w-5 h-5 mr-2 border-2 border-black flex items-center justify-center ${feature.includes("No") ? darkMode ? "bg-red-700" : "bg-red-300" : darkMode ? "bg-green-700" : "bg-green-300"}`}
-                            >
-                              {feature.includes("No") ? "✘" : "✓"}
-                            </div>
-                            <span className={`font-bold ${feature.includes("No") ? "text-gray-500 line-through" : ""}`}>
-                              {feature}
-                            </span>
-                          </motion.li>
+                <Card className={`${review.bg} border-8 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transform ${review.rotate}`}>
+                  <CardContent className="p-6">
+                    <div className="flex items-center mb-4">
+                      <div className="flex">
+                        {[...Array(5)].map((_, i) => (
+                          <Star
+                            key={i}
+                            className={`w-5 h-5 ${i < review.rating ? "text-yellow-400" : "text-gray-300"}`}
+                          />
                         ))}
-                      </ul>
-                      <motion.button 
-                        className={`w-full mt-6 ${plan.buttonColor} text-black font-black border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all transform ${index % 2 === 0 ? 'rotate-1' : '-rotate-1'}`}
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                      >
-                        {plan.buttonText}
-                      </motion.button>
+                      </div>
+                      <span className="ml-2 font-black">{review.name}</span>
                     </div>
+                    <p className="font-bold">"{review.review}"</p>
                   </CardContent>
                 </Card>
               </motion.div>
             ))}
           </div>
-
-          <motion.div 
-            className={`mt-8 p-4 ${darkMode ? "bg-blue-700" : "bg-blue-200"} rounded-none border-4 border-black transform rotate-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]`}
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            transition={{ delay: 0.5 }}
-          >
-            <p className="text-center font-bold">
-              <Gift className="inline-block w-6 h-6 mr-1 transform -rotate-6 animate-bounce" />
-              All new users get a 24-hour trial of premium features upon registration!
-            </p>
-          </motion.div>
         </div>
       </motion.section>
 

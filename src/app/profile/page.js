@@ -1,6 +1,7 @@
 "use client";
 import React, { useState, useEffect } from "react";
 import confetti from "canvas-confetti";
+import { motion, AnimatePresence } from "framer-motion";
 
 const ProfileQuestionnaire = () => {
   const [currentSection, setCurrentSection] = useState(0);
@@ -12,6 +13,12 @@ const ProfileQuestionnaire = () => {
   const [profileData, setProfileData] = useState(null);
   const [isFetching, setIsFetching] = useState(true);
   const [insights, setInsights] = useState("");
+  const [activeSection, setActiveSection] = useState(null); // For accordion
+  const [editingSection, setEditingSection] = useState(null); // For edit mode
+  const [editingAnswers, setEditingAnswers] = useState({}); // Temporary answers during edit
+  const [lightboxImage, setLightboxImage] = useState(null); // For image lightbox
+  const [avatarPreview, setAvatarPreview] = useState(null); // For avatar preview
+  const [imagesPreview, setImagesPreview] = useState([]); // For images preview
 
   const COLORS = {
     primary: "#FF6B6B",
@@ -53,7 +60,7 @@ const ProfileQuestionnaire = () => {
           question: "WHO DO YOU WANNA DATE?",
           type: "singleChoice",
           options: [
-            { value: "men", label: "MEN", emoji: "👨" },
+            { value: "male", label: "MEN", emoji: "👨" },
             { value: "women", label: "WOMEN", emoji: "👩" },
             { value: "both", label: "BOTH", emoji: "✨" },
           ],
@@ -65,9 +72,7 @@ const ProfileQuestionnaire = () => {
           type: "singleChoice",
           options: [
             { value: "male", label: "GUYS WHO CAN LIFT STUFF", emoji: "👨" },
-            { value: "female", label: "GALS WHO STEAL YOUR FRIES", emoji: "👩" },
-            { value: "non-binary", label: "PEOPLE BEYOND THE BINARY", emoji: "✨" },
-            { value: "all", label: "ANYONE FUN, SURPRISE ME", emoji: "🎲" },
+            { value: "woman", label: "GALS WHO STEAL YOUR FRIES", emoji: "👩" },
           ],
           required: true,
         },
@@ -265,14 +270,23 @@ const ProfileQuestionnaire = () => {
     {
       title: "SHOW YOURSELF",
       emoji: "📸",
-      description: "Upload 4-7 pics that scream YOU",
+      description: "Upload a profile avatar and 4-7 pics that scream YOU",
       icon: "🖼️",
       questions: [
+        {
+          id: "avatar",
+          question: "YOUR PROFILE AVATAR (optional)",
+          type: "file",
+          required: false,
+          multiple: false,
+          accept: "image/*",
+          max: 1,
+        },
         {
           id: "images",
           question: "DROP YOUR PICS HERE (optional if editing)",
           type: "file",
-          required: false, // Not required when editing
+          required: false,
           multiple: true,
           accept: "image/*",
           min: 4,
@@ -292,6 +306,8 @@ const ProfileQuestionnaire = () => {
         if (data.profileCompleted) {
           setProfileData(data);
           setAnswers(data);
+          setAvatarPreview(data.avatar);
+          setImagesPreview(data.images || []);
           generateInsights(data);
         }
       } catch (error) {
@@ -307,7 +323,7 @@ const ProfileQuestionnaire = () => {
     try {
       const prompt = `
         Analyze the following dating profile choices and provide a summary of the person's personality, vibe, and what type of person they might be. Be creative, fun, and insightful:
-        ${JSON.stringify({ ...profile, images: undefined }, null, 2)}
+        ${JSON.stringify({ ...profile, images: undefined, avatar: undefined }, null, 2)}
         Provide a response in natural language, focusing on their social energy, romantic style, quirks, and overall vibe.
       `;
       const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent", {
@@ -340,6 +356,78 @@ const ProfileQuestionnaire = () => {
 
   const handleAnswerChange = (questionId, value) => {
     setAnswers({ ...answers, [questionId]: value });
+    if (questionId === "avatar" && value) {
+      setAvatarPreview(URL.createObjectURL(value));
+    } else if (questionId === "images" && value) {
+      setImagesPreview(value.map(file => URL.createObjectURL(file)));
+    }
+  };
+
+  const handleEditAnswerChange = (questionId, value) => {
+    setEditingAnswers({ ...editingAnswers, [questionId]: value });
+    if (questionId === "avatar" && value) {
+      setAvatarPreview(URL.createObjectURL(value));
+    } else if (questionId === "images" && value) {
+      setImagesPreview(value.map(file => URL.createObjectURL(file)));
+    }
+  };
+
+  const startEditing = (sectionIndex) => {
+    setEditingSection(sectionIndex);
+    setEditingAnswers({ ...profileData }); // Initialize with current profile data
+  };
+
+  const cancelEditing = () => {
+    setEditingSection(null);
+    setEditingAnswers({});
+    setAvatarPreview(profileData?.avatar);
+    setImagesPreview(profileData?.images || []);
+  };
+
+  const saveEditing = async (sectionIndex) => {
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      Object.keys(editingAnswers).forEach((key) => {
+        if (key === "images" && editingAnswers[key]) {
+          editingAnswers[key].forEach((file, index) => {
+            formData.append("images", file);
+          });
+        } else if (key === "avatar" && editingAnswers[key]) {
+          formData.append("avatar", editingAnswers[key]);
+        } else if (key !== "images" && key !== "avatar") {
+          formData.append(key, Array.isArray(editingAnswers[key]) ? JSON.stringify(editingAnswers[key]) : editingAnswers[key]);
+        }
+      });
+
+      const response = await fetch("https://dating-backend-1h4q.onrender.com/user/profile", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+      if (response.ok) {
+        const updatedProfile = await response.json();
+        setProfileData({
+          ...editingAnswers,
+          avatar: updatedProfile.profile.avatar || profileData?.avatar,
+          images: editingAnswers.images ? updatedProfile.profile.images : profileData?.images,
+          profileCompleted: true,
+        });
+        setAnswers(editingAnswers);
+        setAvatarPreview(updatedProfile.profile.avatar || profileData?.avatar);
+        setImagesPreview(editingAnswers.images ? updatedProfile.profile.images : profileData?.images || []);
+        generateInsights(editingAnswers);
+        setEditingSection(null);
+        setEditingAnswers({});
+        triggerConfetti();
+      } else {
+        console.error("Failed to save profile");
+      }
+    } catch (error) {
+      console.error("Error submitting profile:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const currentSectionData = sections[currentSection];
@@ -349,6 +437,7 @@ const ProfileQuestionnaire = () => {
     if (currentQuestionData.required && !answers[currentQuestionData.id] && !profileData?.[currentQuestionData.id]) return;
     if (
       currentQuestionData.type === "file" &&
+      currentQuestionData.multiple &&
       answers[currentQuestionData.id] &&
       (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max)
     ) return;
@@ -384,7 +473,9 @@ const ProfileQuestionnaire = () => {
           answers[key].forEach((file, index) => {
             formData.append("images", file);
           });
-        } else if (key !== "images") {
+        } else if (key === "avatar" && answers[key]) {
+          formData.append("avatar", answers[key]);
+        } else if (key !== "images" && key !== "avatar") {
           formData.append(key, Array.isArray(answers[key]) ? JSON.stringify(answers[key]) : answers[key]);
         }
       });
@@ -399,9 +490,12 @@ const ProfileQuestionnaire = () => {
         const updatedProfile = await response.json();
         setProfileData({
           ...answers,
-          images: answers.images ? updatedProfile.profile.images : profileData.images,
+          avatar: updatedProfile.profile.avatar || profileData?.avatar,
+          images: answers.images ? updatedProfile.profile.images : profileData?.images,
           profileCompleted: true,
         });
+        setAvatarPreview(updatedProfile.profile.avatar || profileData?.avatar);
+        setImagesPreview(answers.images ? updatedProfile.profile.images : profileData?.images || []);
         generateInsights(answers);
         triggerConfetti();
       } else {
@@ -419,48 +513,63 @@ const ProfileQuestionnaire = () => {
     switch (currentQuestionData.type) {
       case "text":
         return (
-          <div className="relative">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="relative"
+          >
             <input
               type="text"
-              className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+              className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
               placeholder={currentQuestionData.placeholder || ""}
-              value={answers[currentQuestionData.id] || ""}
+              value={answers[currentQuestionData.id] || profileData?.[currentQuestionData.id] || ""}
               onChange={(e) => handleAnswerChange(currentQuestionData.id, e.target.value)}
               style={{ transform: "rotate(-1deg)" }}
             />
             {currentQuestionData.hints && (
               <>
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.1, rotate: 4 }}
                   onClick={() => setShowHints(!showHints)}
                   className="absolute right-4 top-1/2 transform -translate-y-1/2 p-2 border-2 border-black bg-yellow-300 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all"
                   style={{ transform: "rotate(2deg)" }}
                 >
                   <span className="text-xl">💡</span>
-                </button>
-                {showHints && (
-                  <div
-                    className="mt-2 p-4 bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] font-bold"
-                    style={{ transform: "rotate(1deg)", backgroundColor: COLORS.accent1 }}
-                  >
-                    <p className="mb-2">Try something like:</p>
-                    <ul className="list-disc pl-5">
-                      {currentQuestionData.hints.map((hint, index) => (
-                        <li key={index} className="mb-1">{hint}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                </motion.button>
+                <AnimatePresence>
+                  {showHints && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="mt-2 p-4 bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] font-bold"
+                      style={{ transform: "rotate(1deg)", backgroundColor: COLORS.accent1 }}
+                    >
+                      <p className="mb-2">Try something like:</p>
+                      <ul className="list-disc pl-5">
+                        {currentQuestionData.hints.map((hint, index) => (
+                          <li key={index} className="mb-1">{hint}</li>
+                        ))}
+                      </ul>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </>
             )}
-          </div>
+          </motion.div>
         );
       case "number":
         return (
-          <input
+          <motion.input
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
             type="number"
-            className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+            className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
             placeholder={currentQuestionData.placeholder || ""}
-            value={answers[currentQuestionData.id] || ""}
+            value={answers[currentQuestionData.id] || profileData?.[currentQuestionData.id] || ""}
             min={currentQuestionData.min}
             onChange={(e) => {
               const value = e.target.value;
@@ -473,14 +582,21 @@ const ProfileQuestionnaire = () => {
         );
       case "singleChoice":
         return (
-          <div className="grid grid-cols-1 gap-4 w-full">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="grid grid-cols-1 gap-4 w-full"
+          >
             {currentQuestionData.options.map((option, index) => {
-              const isSelected = answers[currentQuestionData.id] === option.value;
+              const isSelected = (answers[currentQuestionData.id] || profileData?.[currentQuestionData.id]) === option.value;
               const rotations = ["-1deg", "1deg", "-0.5deg", "0.5deg", "0deg"];
               const bgColors = [COLORS.primary, COLORS.secondary, COLORS.accent1, COLORS.accent3, COLORS.light];
               return (
-                <button
+                <motion.button
                   key={option.value}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   className={`flex items-center p-5 text-left transition-all border-4 border-black font-bold ${
                     isSelected ? "shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] translate-y-[-4px]" : "shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                   }`}
@@ -493,26 +609,33 @@ const ProfileQuestionnaire = () => {
                 >
                   {option.emoji && <span className="text-2xl mr-3">{option.emoji}</span>}
                   <span className="text-lg">{option.label}</span>
-                </button>
+                </motion.button>
               );
             })}
-          </div>
+          </motion.div>
         );
       case "multiSelect":
         return (
-          <div className="grid grid-cols-1 gap-4 w-full">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="grid grid-cols-1 gap-4 w-full"
+          >
             {currentQuestionData.options.map((option, index) => {
-              const isSelected = (answers[currentQuestionData.id] || []).includes(option.value);
+              const isSelected = (answers[currentQuestionData.id] || profileData?.[currentQuestionData.id] || []).includes(option.value);
               const rotations = ["-1deg", "1deg", "-0.5deg", "0.5deg", "0deg"];
               const bgColors = [COLORS.primary, COLORS.secondary, COLORS.accent1, COLORS.accent3, COLORS.light];
               return (
-                <button
+                <motion.button
                   key={option.value}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   className={`flex items-center p-5 text-left transition-all border-4 border-black font-bold ${
                     isSelected ? "shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] translate-y-[-4px]" : "shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                   }`}
                   onClick={() => {
-                    const currentValues = answers[currentQuestionData.id] || [];
+                    const currentValues = answers[currentQuestionData.id] || profileData?.[currentQuestionData.id] || [];
                     const newValues = isSelected
                       ? currentValues.filter((v) => v !== option.value)
                       : [...currentValues, option.value];
@@ -526,48 +649,82 @@ const ProfileQuestionnaire = () => {
                 >
                   {option.emoji && <span className="text-2xl mr-3">{option.emoji}</span>}
                   <span className="text-lg">{option.label}</span>
-                </button>
+                </motion.button>
               );
             })}
-          </div>
+          </motion.div>
         );
       case "file":
         return (
-          <div className="relative">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="relative"
+          >
             <input
               type="file"
-              multiple
+              multiple={currentQuestionData.multiple}
               accept={currentQuestionData.accept}
-              className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+              className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
               onChange={(e) => {
                 const files = Array.from(e.target.files);
-                if (files.length < currentQuestionData.min || files.length > currentQuestionData.max) {
-                  alert(`Please upload between ${currentQuestionData.min} and ${currentQuestionData.max} images!`);
+                if (currentQuestionData.multiple) {
+                  if (files.length < currentQuestionData.min || files.length > currentQuestionData.max) {
+                    alert(`Please upload between ${currentQuestionData.min} and ${currentQuestionData.max} images!`);
+                    return;
+                  }
+                } else if (files.length > currentQuestionData.max) {
+                  alert("Please upload only one avatar image!");
                   return;
                 }
-                handleAnswerChange(currentQuestionData.id, files);
+                handleAnswerChange(currentQuestionData.id, currentQuestionData.multiple ? files : files[0]);
               }}
               style={{ transform: "rotate(-1deg)" }}
             />
             <p className="mt-2 text-sm font-bold">
-              Uploaded: {(answers[currentQuestionData.id]?.length || 0)}/{currentQuestionData.max}
+              Uploaded: {currentQuestionData.multiple ? (answers[currentQuestionData.id]?.length || 0) : answers[currentQuestionData.id] ? 1 : 0}/{currentQuestionData.max}
             </p>
-            {profileData?.images && currentSection === sections.length - 1 && (
-              <div className="mt-4">
-                <p className="text-sm font-bold">Current Images:</p>
+            {currentQuestionData.id === "avatar" && (avatarPreview || profileData?.avatar) && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3 }}
+                className="mt-4"
+              >
+                <p className="text-sm font-bold">Avatar Preview:</p>
+                <motion.img
+                  whileHover={{ scale: 1.1 }}
+                  src={avatarPreview || profileData.avatar}
+                  alt="Avatar preview"
+                  className="w-32 h-32 object-cover border-2 border-black rounded-full cursor-pointer"
+                  onClick={() => setLightboxImage(avatarPreview || profileData.avatar)}
+                />
+              </motion.div>
+            )}
+            {currentQuestionData.id === "images" && (imagesPreview.length > 0 || profileData?.images) && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3 }}
+                className="mt-4"
+              >
+                <p className="text-sm font-bold">Images Preview:</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {profileData.images.map((url, index) => (
-                    <img
+                  {(imagesPreview.length > 0 ? imagesPreview : profileData?.images || []).map((url, index) => (
+                    <motion.img
                       key={index}
+                      whileHover={{ scale: 1.1 }}
                       src={url}
-                      alt={`Current pic ${index + 1}`}
-                      className="w-full h-16 object-cover border-2 border-black"
+                      alt={`Image preview ${index + 1}`}
+                      className="w-full h-16 object-cover border-2 border-black cursor-pointer"
+                      onClick={() => setLightboxImage(url)}
                     />
                   ))}
                 </div>
-              </div>
+              </motion.div>
             )}
-          </div>
+          </motion.div>
         );
       default:
         return null;
@@ -578,114 +735,433 @@ const ProfileQuestionnaire = () => {
     if (!profileData) return null;
 
     return (
-      <div className="min-h-screen bg-white p-4 flex items-center justify-center">
-        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div
-            className="p-6 bg-white border-4 border-black shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
-            style={{ transform: "rotate(-2deg)", backgroundColor: COLORS.accent1 }}
+      
+      <div className="min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100 p-6 flex items-center justify-center">
+        <div className="w-full max-w-5xl">
+          {/* Header */}
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="mb-8"
           >
-            <h3 className="text-3xl font-black mb-4 uppercase tracking-tight" style={{ color: COLORS.dark, textShadow: `2px 2px 0 ${COLORS.primary}` }}>
-              🤖 AI VIBE CHECK
-            </h3>
-            <p className="text-lg font-bold whitespace-pre-wrap" style={{ color: COLORS.dark }}>
-              {insights || "Generating your vibe..."}
-            </p>
-          </div>
-
-          <div className="space-y-6">
             <h2
-              className="text-4xl font-black text-black mb-6 uppercase tracking-tight text-center md:text-left"
-              style={{ textShadow: `4px 4px 0 ${COLORS.secondary}` }}
+              className="text-5xl font-black uppercase tracking-tighter"
+              style={{ color: COLORS.dark, textShadow: `4px 4px 0 ${COLORS.primary}` }}
             >
-              YOUR VIBE 🎨
+              YOUR PROFILE
             </h2>
-            {profileData.images && (
+            <div className="mt-2 h-2 bg-black" style={{ width: "100px" }}></div>
+          </motion.div>
+
+          {/* Main Content */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Avatar and Images */}
+            <motion.div
+              initial={{ opacity: 0, x: -50 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5 }}
+              className="space-y-6"
+            >
               <div
-                className="p-5 bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]"
+                className="bg-white border-4 border-black p-4"
+                style={{ boxShadow: "8px 8px 0px rgba(0,0,0,1)" }}
+              >
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-black uppercase" style={{ color: COLORS.accent2 }}>
+                    AVATAR
+                  </h3>
+                  {editingSection !== sections.length - 1 && (
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => startEditing(sections.length - 1)}
+                      className="px-4 py-2 font-black uppercase tracking-tight border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all"
+                      style={{ transform: "rotate(2deg)" }}
+                    >
+                      EDIT ✏️
+                    </motion.button>
+                  )}
+                </div>
+                {editingSection === sections.length - 1 ? (
+                  <div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          handleEditAnswerChange("avatar", file);
+                        }
+                      }}
+                      style={{ transform: "rotate(-1deg)" }}
+                    />
+                    {avatarPreview && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.3 }}
+                        className="mt-4"
+                      >
+                        <p className="text-sm font-bold">Avatar Preview:</p>
+                        <motion.img
+                          whileHover={{ scale: 1.1 }}
+                          src={avatarPreview}
+                          alt="Avatar preview"
+                          className="w-32 h-32 object-cover border-2 border-black rounded-full cursor-pointer"
+                          onClick={() => setLightboxImage(avatarPreview)}
+                        />
+                      </motion.div>
+                    )}
+                  </div>
+                ) : (
+                  profileData.avatar && (
+                    <motion.img
+                      whileHover={{ scale: 1.1 }}
+                      src={profileData.avatar}
+                      alt="Profile avatar"
+                      className="w-40 h-40 object-cover border-2 border-black rounded-full cursor-pointer"
+                      onClick={() => setLightboxImage(profileData.avatar)}
+                    />
+                  )
+                )}
+              </div>
+              <div
+                className="bg-white border-4 border-black p-4"
+                style={{ boxShadow: "8px 8px 0px rgba(0,0,0,1)" }}
+              >
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-black uppercase" style={{ color: COLORS.accent2 }}>
+                    PICS
+                  </h3>
+                  {editingSection !== sections.length - 1 && (
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => startEditing(sections.length - 1)}
+                      className="px-4 py-2 font-black uppercase tracking-tight border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all"
+                      style={{ transform: "rotate(2deg)" }}
+                    >
+                      EDIT ✏️
+                    </motion.button>
+                  )}
+                </div>
+                {editingSection === sections.length - 1 ? (
+                  <div>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files);
+                        if (files.length < 4 || files.length > 7) {
+                          alert("Please upload between 4 and 7 images!");
+                          return;
+                        }
+                        handleEditAnswerChange("images", files);
+                      }}
+                      style={{ transform: "rotate(-1deg)" }}
+                    />
+                    <p className="mt-2 text-sm font-bold">
+                      Uploaded: {imagesPreview.length}/7
+                    </p>
+                    {imagesPreview.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.3 }}
+                        className="mt-4"
+                      >
+                        <p className="text-sm font-bold">Images Preview:</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {imagesPreview.map((url, index) => (
+                            <motion.img
+                              key={index}
+                              whileHover={{ scale: 1.1 }}
+                              src={url}
+                              alt={`Image preview ${index + 1}`}
+                              className="w-full h-16 object-cover border-2 border-black cursor-pointer"
+                              onClick={() => setLightboxImage(url)}
+                            />
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                ) : (
+                  profileData.images && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {profileData.images.map((url, index) => (
+                        <motion.img
+                          key={index}
+                          whileHover={{ scale: 1.1 }}
+                          src={url}
+                          alt={`Profile pic ${index + 1}`}
+                          className="w-full h-24 object-cover border-2 border-black cursor-pointer"
+                          onClick={() => setLightboxImage(url)}
+                        />
+                      ))}
+                    </div>
+                  )
+                )}
+              </div>
+              {editingSection === sections.length - 1 && (
+                <div className="flex justify-between mt-4">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={cancelEditing}
+                    className="px-6 py-3 font-black uppercase tracking-tight border-4 border-black bg-white text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[-2px] transition-all"
+                    style={{ transform: "rotate(-1deg)" }}
+                  >
+                    CANCEL
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => saveEditing(sections.length - 1)}
+                    disabled={loading}
+                    className={`px-6 py-3 font-black uppercase tracking-tight border-4 border-black ${
+                      loading
+                        ? "bg-gray-300 text-gray-600 cursor-not-allowed shadow-none"
+                        : "bg-black text-white shadow-[4px_4px_0px_0px_rgba(78,205,196,1)] hover:shadow-[6px_6px_0px_0px_rgba(78,205,196,1)] hover:translate-y-[-2px] transition-all"
+                    }`}
+                    style={{ transform: "rotate(1deg)" }}
+                  >
+                    {loading ? "SAVING..." : "SAVE"}
+                  </motion.button>
+                </div>
+              )}
+            </motion.div>
+
+            {/* Profile Details with Accordion */}
+            <motion.div
+              initial={{ opacity: 0, x: 50 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5 }}
+              className="md:col-span-2 space-y-4"
+            >
+              {sections.slice(0, -1).map((section, idx) => (
+                <div
+                  key={idx}
+                  className="bg-white border-4 border-black"
+                  style={{ boxShadow: "8px 8px 0px rgba(0,0,0,1)", backgroundColor: COLORS.light }}
+                >
+                  <motion.div
+                    className="w-full flex justify-between items-center p-6"
+                    style={{ color: COLORS[idx % 5] }}
+                  >
+                    <button
+                      onClick={() => setActiveSection(activeSection === idx ? null : idx)}
+                      className="text-left flex-1"
+                    >
+                      <h3 className="text-2xl font-black uppercase">
+                        {section.icon} {section.title}
+                      </h3>
+                    </button>
+                    {editingSection !== idx && (
+                      <motion.button
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => startEditing(idx)}
+                        className="px-4 py-2 font-black uppercase tracking-tight border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all"
+                        style={{ transform: "rotate(2deg)" }}
+                      >
+                        EDIT ✏️
+                      </motion.button>
+                    )}
+                    <button
+                      onClick={() => setActiveSection(activeSection === idx ? null : idx)}
+                      className="ml-4"
+                    >
+                      <span className="text-xl">{activeSection === idx ? "▼" : "▶"}</span>
+                    </button>
+                  </motion.div>
+                  <AnimatePresence>
+                    {activeSection === idx && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="p-6 space-y-4"
+                      >
+                        {section.questions.map((question) => {
+                          const answer = editingSection === idx ? editingAnswers[question.id] : profileData[question.id];
+                          if (!answer && question.id !== "avatar" && question.id !== "images") return null;
+
+                          let displayAnswer;
+                          if (question.type === "text" || question.type === "number") {
+                            displayAnswer = answer;
+                          } else if (question.type === "multiSelect") {
+                            displayAnswer = question.options
+                              .filter((opt) => answer?.includes(opt.value))
+                              .map((opt) => `${opt.emoji} ${opt.label}`)
+                              .join(", ");
+                          } else if (question.type === "singleChoice") {
+                            displayAnswer = question.options.find((opt) => opt.value === answer)?.label || answer;
+                          } else {
+                            displayAnswer = answer;
+                          }
+
+                          return (
+                            <div key={question.id} className="flex flex-col">
+                              <span className="text-sm font-black uppercase" style={{ color: COLORS.dark }}>
+                                {question.question}
+                              </span>
+                              {editingSection === idx ? (
+                                question.type === "text" ? (
+                                  <input
+                                    type="text"
+                                    className="w-full p-3 text-lg bg-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+                                    placeholder={question.placeholder || ""}
+                                    value={editingAnswers[question.id] || ""}
+                                    onChange={(e) => handleEditAnswerChange(question.id, e.target.value)}
+                                  />
+                                ) : question.type === "number" ? (
+                                  <input
+                                    type="number"
+                                    className="w-full p-3 text-lg bg-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+                                    placeholder={question.placeholder || ""}
+                                    value={editingAnswers[question.id] || ""}
+                                    min={question.min}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      if (!question.min || value >= question.min) {
+                                        handleEditAnswerChange(question.id, value);
+                                      }
+                                    }}
+                                  />
+                                ) : question.type === "singleChoice" ? (
+                                  <select
+                                    className="w-full p-3 text-lg bg-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+                                    value={editingAnswers[question.id] || ""}
+                                    onChange={(e) => handleEditAnswerChange(question.id, e.target.value)}
+                                  >
+                                    <option value="" disabled>Select an option</option>
+                                    {question.options.map((option) => (
+                                      <option key={option.value} value={option.value}>
+                                        {option.emoji} {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : question.type === "multiSelect" ? (
+                                  <select
+                                    multiple
+                                    className="w-full p-3 text-lg bg-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all font-bold"
+                                    value={editingAnswers[question.id] || []}
+                                    onChange={(e) => {
+                                      const values = Array.from(e.target.selectedOptions, (option) => option.value);
+                                      handleEditAnswerChange(question.id, values);
+                                    }}
+                                  >
+                                    {question.options.map((option) => (
+                                      <option key={option.value} value={option.value}>
+                                        {option.emoji} {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="text-lg font-bold" style={{ color: COLORS.accent2 }}>
+                                    {displayAnswer || "Not answered"}
+                                  </span>
+                                )
+                              ) : (
+                                <span className="text-lg font-bold" style={{ color: COLORS.accent2 }}>
+                                  {displayAnswer || "Not answered"}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {editingSection === idx && (
+                          <div className="flex justify-between mt-4">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={cancelEditing}
+                              className="px-6 py-3 font-black uppercase tracking-tight border-4 border-black bg-white text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[-2px] transition-all"
+                              style={{ transform: "rotate(-1deg)" }}
+                            >
+                              CANCEL
+                            </motion.button>
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => saveEditing(idx)}
+                              disabled={loading || section.questions.some(q => q.required && !editingAnswers[q.id])}
+                              className={`px-6 py-3 font-black uppercase tracking-tight border-4 border-black ${
+                                loading || section.questions.some(q => q.required && !editingAnswers[q.id])
+                                  ? "bg-gray-300 text-gray-600 cursor-not-allowed shadow-none"
+                                  : "bg-black text-white shadow-[4px_4px_0px_0px_rgba(78,205,196,1)] hover:shadow-[6px_6px_0px_0px_rgba(78,205,196,1)] hover:translate-y-[-2px] transition-all"
+                              }`}
+                              style={{ transform: "rotate(1deg)" }}
+                            >
+                              {loading ? "SAVING..." : "SAVE"}
+                            </motion.button>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ))}
+              <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+              className="mt-6"
+            >
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => (window.location.href = "/dashboard")}
+                className="w-full bg-black text-white py-4 px-6 text-xl font-black uppercase tracking-tight border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,107,107,1)] hover:shadow-[8px_8px_0px_0px_rgba(255,107,107,1)] hover:translate-y-[-4px] transition-all"
                 style={{ transform: "rotate(1deg)" }}
               >
-                <h3 className="text-xl font-black mb-3 uppercase" style={{ color: COLORS.accent2 }}>
-                  📸 YOUR PICS
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  {profileData.images.map((url, index) => (
-                    <img
-                      key={index}
-                      src={url}
-                      alt={`Profile pic ${index + 1}`}
-                      className="w-full h-32 object-cover border-2 border-black"
-                      style={{ transform: `rotate(${index % 2 === 0 ? "-1deg" : "1deg"})` }}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-            {sections.map((section, idx) => (
-              <div
-                key={idx}
-                className="p-5 bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]"
-                style={{ transform: `rotate(${idx % 2 === 0 ? "1deg" : "-1deg"})`, backgroundColor: COLORS.light }}
-              >
-                <h3 className="text-xl font-black mb-3 uppercase" style={{ color: COLORS[idx % 5] }}>
-                  {section.icon} {section.title}
-                </h3>
-                <div className="space-y-2">
-                  {section.questions.map((question) => {
-                    const answer = profileData[question.id];
-                    if (!answer) return null;
-
-                    let displayAnswer;
-                    if (question.type === "text" || question.type === "number") {
-                      displayAnswer = answer;
-                    } else if (question.type === "multiSelect") {
-                      displayAnswer = question.options
-                        .filter((opt) => answer.includes(opt.value))
-                        .map((opt) => `${opt.emoji} ${opt.label}`)
-                        .join(", ");
-                    } else if (question.type === "singleChoice") {
-                      displayAnswer = question.options.find((opt) => opt.value === answer)?.label || answer;
-                    } else if (question.type === "file") {
-                      displayAnswer = `${answer.length} images uploaded`;
-                    } else {
-                      displayAnswer = answer;
-                    }
-
-                    return (
-                      <div key={question.id} className="flex flex-col">
-                        <span className="text-sm font-bold text-black uppercase">{question.question}</span>
-                        <span className="text-lg" style={{ color: COLORS.dark }}>
-                          {displayAnswer || "Not answered"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            <button
-              onClick={() => {
-                setProfileData(null);
-                setCompleted(false);
-                setAnswers(profileData);
-                setCurrentSection(0);
-                setCurrentQuestion(0);
-              }}
-              className="w-full bg-black text-white py-3 px-5 text-lg font-black uppercase tracking-tight border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,107,107,1)] hover:shadow-[8px_8px_0px_0px_rgba(255,107,107,1)] hover:translate-y-[-4px] transition-all"
-              style={{ transform: "rotate(1deg)" }}
-            >
-              EDIT YOUR VIBE ✏️
-            </button>
+                GO TO DASHBOARD ✨
+              </motion.button>
+            </motion.div>
+            </motion.div>
           </div>
         </div>
+        {/* Lightbox for Images */}
+        <AnimatePresence>
+          {lightboxImage && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
+              onClick={() => setLightboxImage(null)}
+            >
+              <motion.img
+                initial={{ scale: 0.8 }}
+                animate={{ scale: 1 }}
+                transition={{ duration: 0.3 }}
+                src={lightboxImage}
+                alt="Lightbox image"
+                className="max-w-[90%] max-h-[90%] object-contain"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     );
   };
 
   if (isFetching) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="min-h-screen flex items-center justify-center"
+      >
         <p className="text-2xl font-black">LOADING YOUR VIBE...</p>
-      </div>
+      </motion.div>
     );
   }
 
@@ -693,7 +1169,12 @@ const ProfileQuestionnaire = () => {
     return profileData ? (
       renderProfileView()
     ) : (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-white">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5 }}
+        className="min-h-screen flex flex-col items-center justify-center p-6 bg-white"
+      >
         <div
           className="max-w-md w-full mx-auto bg-white p-8 border-4 border-black shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]"
           style={{ backgroundColor: COLORS.accent1, transform: "rotate(-1deg)" }}
@@ -708,21 +1189,31 @@ const ProfileQuestionnaire = () => {
           <p className="text-xl text-black mb-6 font-bold">
             Your vibe is officially on the map. Time to meet your match!
           </p>
-          <button
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             onClick={() => (window.location.href = "/dashboard")}
             className="w-full bg-black text-white py-4 px-6 text-xl font-black uppercase tracking-tight border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,107,107,1)] hover:shadow-[8px_8px_0px_0px_rgba(255,107,107,1)] hover:translate-y-[-4px] transition-all"
           >
             MEET YOUR PEOPLE! ✨
-          </button>
+          </motion.button>
         </div>
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-white p-4 flex flex-col items-center justify-center">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="min-h-screen bg-white p-4 flex flex-col items-center justify-center"
+    >
       <div className="w-full max-w-md mb-8">
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
           className="text-center mb-4 p-3 border-4 border-black font-black text-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
           style={{
             backgroundColor:
@@ -736,10 +1227,15 @@ const ProfileQuestionnaire = () => {
           }}
         >
           {currentSectionData.icon} {currentSectionData.title}
-        </div>
+        </motion.div>
 
-        <div className="bg-white border-4 border-black h-6 mb-6 overflow-hidden">
-          <div
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, delay: 0.1 }}
+          className="bg-white border-4 border-black h-6 mb-6 overflow-hidden"
+        >
+          <motion.div
             className="h-full transition-all duration-500"
             style={{
               width: `${((currentSection * 100) / sections.length) +
@@ -748,9 +1244,12 @@ const ProfileQuestionnaire = () => {
               backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,.2) 10px, rgba(255,255,255,.2) 20px)`,
             }}
           />
-        </div>
+        </motion.div>
 
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, delay: 0.2 }}
           className="bg-white border-4 border-black p-6 md:p-8 mb-4 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]"
           style={{ transform: "rotate(1deg)" }}
         >
@@ -762,7 +1261,9 @@ const ProfileQuestionnaire = () => {
           </div>
 
           <div className="flex justify-between mt-8">
-            <button
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={prevQuestion}
               disabled={currentSection === 0 && currentQuestion === 0}
               className={`px-6 py-3 font-black uppercase tracking-tight border-4 border-black ${
@@ -773,16 +1274,18 @@ const ProfileQuestionnaire = () => {
               style={{ transform: "rotate(-1deg)" }}
             >
               Back
-            </button>
-            <button
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={nextQuestion}
               disabled={
                 (currentQuestionData.required && !answers[currentQuestionData.id] && !profileData?.[currentQuestionData.id]) ||
-                (currentQuestionData.type === "file" && answers[currentQuestionData.id] && (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max))
+                (currentQuestionData.type === "file" && currentQuestionData.multiple && answers[currentQuestionData.id] && (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max))
               }
               className={`px-6 py-3 font-black uppercase tracking-tight border-4 border-black ${
                 (currentQuestionData.required && !answers[currentQuestionData.id] && !profileData?.[currentQuestionData.id]) ||
-                (currentQuestionData.type === "file" && answers[currentQuestionData.id] && (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max))
+                (currentQuestionData.type === "file" && currentQuestionData.multiple && answers[currentQuestionData.id] && (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max))
                   ? "bg-gray-300 text-gray-600 cursor-not-allowed shadow-none"
                   : "bg-black text-white shadow-[4px_4px_0px_0px_rgba(78,205,196,1)] hover:shadow-[6px_6px_0px_0px_rgba(78,205,196,1)] hover:translate-y-[-2px] transition-all"
               }`}
@@ -793,18 +1296,21 @@ const ProfileQuestionnaire = () => {
                   ? "SAVING..."
                   : "FINISH"
                 : "NEXT"}
-            </button>
+            </motion.button>
           </div>
 
-          <div
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.3 }}
             className="mt-8 inline-block py-1 px-3 font-black text-sm border-2 border-black"
             style={{ backgroundColor: COLORS.accent1, transform: "rotate(-2deg)" }}
           >
             {currentQuestion + 1}/{currentSectionData.questions.length}
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
