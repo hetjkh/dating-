@@ -30,7 +30,7 @@ const Chats = () => {
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+    const socketUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com";
     const newSocket = io(socketUrl, {
       withCredentials: true,
       reconnection: true,
@@ -121,7 +121,7 @@ const Chats = () => {
       try {
         setLoading(true);
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"}/user/chat-partners`,
+          `${process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"}/user/chat-partners`,
           {
             method: "GET",
             credentials: "include",
@@ -152,7 +152,7 @@ const Chats = () => {
 
             try {
               await fetch(
-                `${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"}/user/add-chat-partner`,
+                `${process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"}/user/add-chat-partner`,
                 {
                   method: "POST",
                   credentials: "include",
@@ -188,7 +188,7 @@ const Chats = () => {
         setLoading(true);
         const response = await fetch(
           `${
-            process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+            process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"
           }/user/chat-messages/${selectedPartner.userId}`,
           {
             method: "GET",
@@ -224,7 +224,7 @@ const Chats = () => {
       try {
         const response = await fetch(
           `${
-            process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+            process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"
           }/gifs/search?query=${encodeURIComponent(gifQuery)}`,
           {
             method: "GET",
