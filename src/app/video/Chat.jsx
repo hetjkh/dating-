@@ -1,7 +1,17 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import io from "socket.io-client";
+import { io } from "socket.io-client";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Heart, Menu } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Label } from "@/components/ui/label";
 
 const Chat = () => {
   const [socket, setSocket] = useState(null);
@@ -9,27 +19,101 @@ const Chat = () => {
   const [chat, setChat] = useState([]);
   const [status, setStatus] = useState("Click Start to begin");
   const [sessionId, setSessionId] = useState(null);
+  const [partnerUserId, setPartnerUserId] = useState(null);
   const [isStarted, setIsStarted] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(120);
+  const [showContinuePrompt, setShowContinuePrompt] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [genderPreference, setGenderPreference] = useState("both");
+  const [userGender, setUserGender] = useState("");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const iceCandidatesQueueRef = useRef([]);
   const localStreamRef = useRef(null);
   const currentSessionIdRef = useRef(null);
+  const timerRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const router = useRouter();
 
-  // Initialize socket connection
+  // Fetch user profile to get gender
   useEffect(() => {
-    const newSocket = io("https://dating-backend-1h4q.onrender.com", {
+    const fetchProfile = async () => {
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"}/user/profile`,
+          {
+            method: "GET",
+            credentials: "include",
+          }
+        );
+        if (!response.ok) {
+          throw new Error("Failed to fetch profile");
+        }
+        const profile = await response.json();
+        if (profile.yourGender) {
+          setUserGender(profile.yourGender);
+        }
+      } catch (error) {
+        console.error("Error fetching profile:", error);
+        setStatus("Failed to load profile data");
+      }
+    };
+
+    fetchProfile();
+  }, []);
+
+  // Auto-scroll to latest message
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [chat]);
+
+  // Socket connection and event handlers
+  useEffect(() => {
+    if (!isStarted) return;
+
+    setStatus("Initializing connection...");
+
+    const socketUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com";
+    const newSocket = io(socketUrl, {
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
+      query: { genderPreference },
+      transports: ["websocket"],
     });
 
     newSocket.on("connect", () => {
       console.log("Socket connected");
-      if (isStarted) {
-        setStatus("Looking for a stranger...");
+      setStatus("Looking for a compatible stranger...");
+      setLoading(false);
+    });
+
+    newSocket.on("connect_error", (err) => {
+      console.error("Socket connect_error:", err.message, err.stack);
+      setStatus("Failed to connect to server. Retrying...");
+      setLoading(false);
+    });
+
+    newSocket.on("error", (err) => {
+      console.error("Socket error:", err.message, err.stack);
+      if (err.message === "Profile incomplete. Please complete your profile to chat.") {
+        setStatus("Please complete your profile to start chatting.");
+        setIsStarted(false);
+        router.push("/profile");
+      } else if (err.message === "Invalid gender preference") {
+        setStatus("Invalid gender preference selected. Please choose a valid option.");
+        setIsStarted(false);
+      } else {
+        setStatus("Connection error. Please try again.");
+        setIsStarted(false);
       }
     });
 
@@ -37,6 +121,10 @@ const Chat = () => {
       console.log("Socket disconnected");
       setStatus("Disconnected - trying to reconnect...");
       cleanupVideoCall();
+      clearTimer();
+      setShowContinuePrompt(false);
+      setPartnerUserId(null);
+      currentSessionIdRef.current = null;
     });
 
     newSocket.on("waiting", ({ message }) => {
@@ -44,8 +132,11 @@ const Chat = () => {
       setStatus(message);
       setChat([]);
       setSessionId(null);
+      setPartnerUserId(null);
       currentSessionIdRef.current = null;
       cleanupVideoCall();
+      clearTimer();
+      setShowContinuePrompt(false);
     });
 
     newSocket.on("paired", async ({ message, sessionId: newSessionId }) => {
@@ -55,18 +146,19 @@ const Chat = () => {
       currentSessionIdRef.current = newSessionId;
       setStatus("Connecting video...");
       setChat([]);
-      
-      // Ensure we have local stream before starting
+      setTimeLeft(120);
+      startTimer();
+      setShowContinuePrompt(false);
+
       await ensureLocalStream();
-      
-      // Delay starting the video call
+
       setTimeout(() => {
         startVideoCall(newSocket, newSessionId);
       }, 1000);
     });
 
     newSocket.on("message", ({ text, from }) => {
-      setChat(prev => [...prev, { from: "stranger", text }]);
+      setChat((prev) => [...prev, { from: "stranger", text, createdAt: new Date() }]);
     });
 
     newSocket.on("partner_left", ({ message }) => {
@@ -74,8 +166,53 @@ const Chat = () => {
       setStatus("Partner disconnected - finding new match...");
       setChat([]);
       setSessionId(null);
+      setPartnerUserId(null);
       currentSessionIdRef.current = null;
       cleanupVideoCall();
+      clearTimer();
+      setShowContinuePrompt(false);
+    });
+
+    newSocket.on("session_timeout_prompt", ({ message }) => {
+      console.log("Session timeout prompt:", message);
+      setStatus(message);
+      setShowContinuePrompt(true);
+      clearTimer();
+    });
+
+    newSocket.on("session_timeout", ({ message }) => {
+      console.log("Session timed out");
+      setStatus("Session timed out - finding new match...");
+      setChat([]);
+      setSessionId(null);
+      setPartnerUserId(null);
+      currentSessionIdRef.current = null;
+      cleanupVideoCall();
+      clearTimer();
+      setShowContinuePrompt(false);
+      newSocket.emit("next");
+    });
+
+    newSocket.on("continue_chat", async ({ message, partnerUserId, partnerName }) => {
+      console.log("Both users agreed to continue, redirecting to messaging:", partnerUserId);
+      setShowContinuePrompt(false);
+      setPartnerUserId(partnerUserId);
+      cleanupVideoCall();
+      clearTimer();
+      try {
+        await fetch(
+          `${process.env.NEXT_PUBLIC_BACKEND_URL || "https://dating-backend-1h4q.onrender.com"}/user/add-chat-partner`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ partnerId: partnerUserId }),
+          }
+        );
+      } catch (err) {
+        console.error("Error adding chat partner:", err);
+      }
+      router.push(`/chats?partnerId=${partnerUserId}&partnerName=${encodeURIComponent(partnerName)}`);
     });
 
     newSocket.on("offer", async ({ offer, sessionId: offerSessionId }) => {
@@ -88,7 +225,7 @@ const Chat = () => {
       try {
         await cleanupVideoCall();
         await ensureLocalStream();
-        
+
         const pc = createPeerConnection(newSocket, offerSessionId);
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
@@ -143,16 +280,18 @@ const Chat = () => {
 
     return () => {
       cleanupVideoCall();
+      clearTimer();
       newSocket.disconnect();
+      console.log("Socket disconnected due to cleanup");
     };
-  }, [isStarted]);
+  }, [isStarted, genderPreference, router]);
 
   const ensureLocalStream = async () => {
     if (!localStreamRef.current) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: true, 
-          audio: true 
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
         });
         localStreamRef.current = stream;
         if (localVideoRef.current) {
@@ -211,7 +350,7 @@ const Chat = () => {
         const [remoteStream] = event.streams;
         if (remoteVideoRef.current.srcObject !== remoteStream) {
           remoteVideoRef.current.srcObject = remoteStream;
-          remoteVideoRef.current.play().catch(e => {
+          remoteVideoRef.current.play().catch((e) => {
             console.error("Error playing remote video:", e);
             setTimeout(() => {
               remoteVideoRef.current?.play().catch(console.error);
@@ -221,9 +360,8 @@ const Chat = () => {
       }
     };
 
-    // Add local tracks to the connection
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
+      localStreamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, localStreamRef.current);
       });
     }
@@ -234,9 +372,10 @@ const Chat = () => {
 
   const processQueuedIceCandidates = () => {
     if (peerConnectionRef.current?.remoteDescription) {
-      iceCandidatesQueueRef.current.forEach(candidate => {
-        peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate))
-          .catch(error => console.error("Error processing queued candidate:", error));
+      iceCandidatesQueueRef.current.forEach((candidate) => {
+        peerConnectionRef.current.addIceCandidate(candidate).catch((error) =>
+          console.error("Error processing queued candidate:", error)
+        );
       });
       iceCandidatesQueueRef.current = [];
     }
@@ -258,8 +397,7 @@ const Chat = () => {
 
   const cleanupVideoCall = async () => {
     console.log("Cleaning up video call");
-    
-    // Close and cleanup peer connection
+
     if (peerConnectionRef.current) {
       peerConnectionRef.current.ontrack = null;
       peerConnectionRef.current.onicecandidate = null;
@@ -268,140 +406,396 @@ const Chat = () => {
       peerConnectionRef.current = null;
     }
 
-    // Clear remote video
     if (remoteVideoRef.current) {
       const stream = remoteVideoRef.current.srcObject;
       if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
       }
       remoteVideoRef.current.srcObject = null;
     }
 
-    // Clear ICE candidates queue
     iceCandidatesQueueRef.current = [];
+  };
+
+  const startTimer = () => {
+    clearTimer();
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearTimer();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setTimeLeft(120);
+  };
+
+  const formatTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const formatTimestamp = (date) => {
+    return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
   const handleStart = async () => {
     try {
-      setIsStarted(true);
       setStatus("Starting camera...");
+      setLoading(true);
       await ensureLocalStream();
-      if (socket) {
-        setStatus("Looking for a stranger...");
-        socket.emit("next");
-      }
+      setIsStarted(true);
+      setLoading(false);
     } catch (error) {
       console.error("Failed to start:", error);
       setStatus("Failed to start - please check camera permissions");
+      setLoading(false);
     }
   };
 
   const nextChat = async () => {
     if (!socket || !isStarted) return;
-    
+
     console.log("Requesting next chat");
-    setStatus("Looking for new match...");
+    setStatus("Looking for a compatible stranger...");
+    setLoading(true);
     await cleanupVideoCall();
     setSessionId(null);
+    setPartnerUserId(null);
     currentSessionIdRef.current = null;
     setChat([]);
-    
+    clearTimer();
+    setShowContinuePrompt(false);
+
     try {
       await ensureLocalStream();
       socket.emit("next");
+      setLoading(false);
     } catch (error) {
       console.error("Failed to prepare for next chat:", error);
       setStatus("Failed to access camera - please refresh");
+      setLoading(false);
     }
   };
 
-  const sendMessage = () => {
-    if (socket && message && sessionId) {
-      socket.emit("message", { text: message });
-      setChat(prev => [...prev, { from: "me", text: message }]);
-      setMessage("");
+  const sendMessage = async () => {
+    if (socket && message && sessionId && partnerUserId) {
+      try {
+        setLoading(true);
+        const newMessage = { from: "me", text: message, createdAt: new Date() };
+        setChat((prev) => [...prev, newMessage]);
+        socket.emit("message", { text: message, toUserId: partnerUserId });
+        setMessage("");
+        setLoading(false);
+      } catch (error) {
+        console.error("Error sending message:", error);
+        setStatus("Failed to send message");
+        setLoading(false);
+      }
     }
+  };
+
+  const handleContinueResponse = (continueChat) => {
+    if (socket && sessionId) {
+      socket.emit("continue_response", { sessionId, continueChat });
+      setShowContinuePrompt(false);
+      setStatus("Waiting for other user's response...");
+    }
+  };
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2">Random Video Chat</h1>
-        <div className="bg-blue-100 p-3 rounded">
-          <p className="font-semibold">Status: {status}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        <div className="space-y-2">
-          <p className="font-semibold">Your Camera</p>
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full bg-black rounded-lg"
-          />
-        </div>
-        <div className="space-y-2">
-          <p className="font-semibold">Stranger's Camera</p>
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className="w-full bg-black rounded-lg"
-          />
-        </div>
-      </div>
-
-      <div className="mb-6 bg-gray-100 p-4 rounded-lg h-64 overflow-y-auto">
-        {chat.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`mb-2 p-2 rounded ${
-              msg.from === "me" ? "bg-blue-100 ml-auto" : "bg-white"
-            } max-w-[80%]`}
-          >
-            <strong>{msg.from}:</strong> {msg.text}
+    <div className="min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100 p-4 font-sans flex items-center justify-center">
+      <div className="w-full max-w-6xl h-[calc(100vh-2rem)] flex gap-3">
+        {/* Sidebar */}
+        <motion.div
+          initial={{ width: 256 }}
+          animate={{ width: isSidebarOpen ? 256 : 40 }}
+          transition={{ duration: 0.3 }}
+          className="flex-shrink-0"
+        >
+          <div className="h-full flex flex-col">
+            <Button
+              onClick={toggleSidebar}
+              className="w-full border-2 border-black rounded-none bg-gray-200 text-black hover:bg-gray-300 shadow-[2px_2px_0_0_#000] mb-1"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            {isSidebarOpen && (
+              <Card className="border-2 border-black shadow-[4px_4px_0_0_#000] bg-white flex-1">
+                <CardHeader className="border-b-2 border-black py-2">
+                  <CardTitle className="text-lg font-extrabold text-black">Settings</CardTitle>
+                </CardHeader>
+                <CardContent className="p-3 space-y-3">
+                  <div>
+                    <Label htmlFor="genderPreference" className="block text-sm font-bold text-black mb-1">
+                      Gender Preference
+                    </Label>
+                    <Select value={genderPreference} onValueChange={setGenderPreference}>
+                      <SelectTrigger className="border-2 border-black rounded-none focus:ring-0 focus:border-pink-500 bg-white text-black text-sm">
+                        <SelectValue placeholder="Select preference" />
+                      </SelectTrigger>
+                      <SelectContent className="border-2 border-black rounded-none bg-white">
+                        <SelectItem value="both">Both</SelectItem>
+                        <SelectItem value="men">Men</SelectItem>
+                        <SelectItem value="women">Women</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm text-black">Your Gender</p>
+                    <p className="px-3 py-1 bg-gray-100 border-2 border-black rounded-none text-black text-sm">
+                      {userGender || "Loading..."}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
-        ))}
-      </div>
+        </motion.div>
 
-      <div className="flex gap-4">
-        {!isStarted ? (
-          <button
-            onClick={handleStart}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 w-full"
+        {/* Main Content */}
+        <div className="flex-1 flex flex-col gap-3">
+          {/* Header and Status */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
           >
-            Start Chat
-          </button>
-        ) : (
-          <>
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Type a message..."
-              className="flex-1 p-2 border rounded"
-              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-            />
-            <button
-              onClick={sendMessage}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            <Card className="border-2 border-black shadow-[4px_4px_0_0_#000] bg-yellow-200">
+              <CardHeader className="border-b-2 border-black flex items-center justify-between py-2">
+                <CardTitle className="text-3xl font-extrabold text-black flex items-center gap-2 bg-pink-300 px-3 py-1 border-2 border-black shadow-[4px_4px_0_0_#000] animate-pulse">
+                  <Heart className="h-8 w-8 text-red-500" />
+                  Let's Ignite
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.3 }}
+                  className={`p-2 rounded-none border-2 border-black text-sm flex items-center justify-between ${
+                    status.includes("Connected")
+                      ? "bg-green-200 text-green-800"
+                      : status.includes("failed") || status.includes("Failed")
+                      ? "bg-red-200 text-red-800"
+                      : status.includes("Looking")
+                      ? "bg-yellow-200 text-yellow-800"
+                      : "bg-blue-200 text-blue-800"
+                  }`}
+                >
+                  <p className="font-semibold">{status}</p>
+                  {loading && <p className="ml-2 text-xs">Loading...</p>}
+                  {sessionId && status.includes("Connected") && (
+                    <motion.div
+                      animate={timeLeft <= 10 ? { scale: [1, 1.1, 1] } : {}}
+                      transition={timeLeft <= 10 ? { repeat: Infinity, duration: 0.5 } : {}}
+                      className="text-sm font-bold text-white bg-red-500 border-2 border-black px-3 py-1 rounded-none shadow-[2px_2px_0_0_#000]"
+                    >
+                      Time: {formatTime(timeLeft)}
+                    </motion.div>
+                  )}
+                </motion.div>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Video Feeds */}
+          <div className="grid grid-cols-2 gap-3">
+            <Card className="border-4 border-black shadow-[6px_6px_0_0_#000] bg-white">
+              <CardHeader className="border-b-2 border-black py-2">
+                <p className="font-bold text-lg text-black">Your Camera</p>
+              </CardHeader>
+              <CardContent className="p-3">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-72 bg-black rounded-none object-cover"
+                />
+              </CardContent>
+            </Card>
+            <Card className="border-4 border-black shadow-[6px_6px_0_0_#000] bg-white">
+              <CardHeader className="border-b-2 border-black py-2">
+                <p className="font-bold text-lg text-black">Stranger's Camera</p>
+              </CardHeader>
+              <CardContent className="p-3">
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-72 bg-black rounded-none object-cover"
+                />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Chat Area */}
+          <Card className="flex-1 flex flex-col border-2 border-black shadow-[4px_4px_0_0_#000] bg-white">
+            <CardHeader className="border-b-2 border-black py-2">
+              <CardTitle className="text-lg font-extrabold text-black">Chat</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col p-3">
+              <ScrollArea className="flex-1 pr-3 h-28" ref={chatContainerRef}>
+                {loading && (
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-gray-600 text-center text-sm"
+                  >
+                    Loading messages...
+                  </motion.p>
+                )}
+                {!loading && chat.length === 0 && (
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-gray-600 text-center text-sm"
+                  >
+                    No messages yet
+                  </motion.p>
+                )}
+                <AnimatePresence>
+                  {!loading &&
+                    chat.map((msg, idx) => (
+                      <motion.div
+                        key={idx}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className={`mb-3 p-2 rounded-none border-2 border-black max-w-[70%] text-sm ${
+                          msg.from === "me"
+                            ? "ml-auto bg-pink-300 shadow-[2px_2px_0_0_#000]"
+                            : "mr-auto bg-white shadow-[2px_2px_0_0_#000]"
+                        }`}
+                      >
+                        <div className="flex justify-between items-start">
+                          <strong>{msg.from === "me" ? "You" : "Stranger"}:</strong>
+                          <span className="text-xs text-gray-600 ml-2">
+                            {formatTimestamp(msg.createdAt)}
+                          </span>
+                        </div>
+                        <p className="mt-1">{msg.text}</p>
+                      </motion.div>
+                    ))}
+                </AnimatePresence>
+              </ScrollArea>
+              {isStarted && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="mt-3 p-3 border-t-2 border-black bg-white flex gap-2 flex-wrap"
+                >
+                  <Input
+                    type="text"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") sendMessage(); }}
+                    placeholder="Type a message..."
+                    className="flex-1 min-w-[200px] border-2 border-black rounded-none focus:ring-0 focus:border-pink-500 bg-white text-black placeholder-gray-400 text-sm"
+                    disabled={loading || !partnerUserId}
+                  />
+                  <Button
+                    onClick={sendMessage}
+                    disabled={!message.trim() || loading || !partnerUserId}
+                    className={`border-2 border-black rounded-none bg-purple-500 text-white hover:bg-purple-600 shadow-[2px_2px_0_0_#000] text-sm px-3 transition-transform duration-200 ${
+                      !message.trim() || loading || !partnerUserId ? "opacity-50 cursor-not-allowed" : "hover:scale-105"
+                    }`}
+                  >
+                    Send
+                  </Button>
+                  <Button
+                    onClick={nextChat}
+                    disabled={loading}
+                    className={`border-2 border-black rounded-none bg-green-500 text-white hover:bg-green-600 shadow-[2px_2px_0_0_#000] text-sm px-3 transition-transform duration-200 ${
+                      loading ? "opacity-50 cursor-not-allowed" : "hover:scale-105"
+                    }`}
+                  >
+                    Next
+                  </Button>
+                </motion.div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Start Button */}
+          {!isStarted && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.4 }}
             >
-              Send
-            </button>
-            <button
-              onClick={nextChat}
-              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+              <Button
+                onClick={handleStart}
+                disabled={loading}
+                className={`w-full border-2 border-black rounded-none bg-pink-500 text-white hover:bg-pink-600 shadow-[4px_4px_0_0_#000] transition-transform duration-200 text-sm py-2 ${
+                  loading ? "opacity-50 cursor-not-allowed" : "hover:scale-105"
+                }`}
+              >
+                {loading ? "Starting..." : "Start Chat"}
+              </Button>
+            </motion.div>
+          )}
+        </div>
+
+        {/* Continue Prompt Popup */}
+        <AnimatePresence>
+          {showContinuePrompt && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.3 }}
+              className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
             >
-              Next Stranger
-            </button>
-          </>
-        )}
+              <Card className="bg-yellow-200 border-2 border-black shadow-[4px_4px_0_0_#000] max-w-sm">
+                <CardHeader className="border-b-2 border-black py-2">
+                  <CardTitle className="text-lg font-extrabold text-black">Time's Up!</CardTitle>
+                </CardHeader>
+                <CardContent className="p-3">
+                  <p className="mb-3 text-black font-bold text-sm">Your 2-minute chat is over. Would you like to continue chatting?</p>
+                  <div className="flex gap-3">
+                    <Button
+                      onClick={() => handleContinueResponse(true)}
+                      className="flex-1 border-2 border-black rounded-none bg-green-500 text-white hover:bg-green-600 shadow-[2px_2px_0_0_#000] text-sm transition-transform duration-200 hover:scale-105"
+                    >
+                      Yes
+                    </Button>
+                    <Button
+                      onClick={() => handleContinueResponse(false)}
+                      className="flex-1 border-2 border-black rounded-none bg-red-500 text-white hover:bg-red-600 shadow-[2px_2px_0_0_#000] text-sm transition-transform duration-200 hover:scale-105"
+                    >
+                      No
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
 };
 
-export default Chat;
+export default function Home() {
+  return (
+    <main>
+      <Chat />
+    </main>
+  );
+}
