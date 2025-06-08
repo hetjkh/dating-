@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import confetti from "canvas-confetti";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -13,12 +13,13 @@ const ProfileQuestionnaire = () => {
   const [profileData, setProfileData] = useState(null);
   const [isFetching, setIsFetching] = useState(true);
   const [insights, setInsights] = useState("");
-  const [activeSection, setActiveSection] = useState(null); // For accordion
-  const [editingSection, setEditingSection] = useState(null); // For edit mode
-  const [editingAnswers, setEditingAnswers] = useState({}); // Temporary answers during edit
-  const [lightboxImage, setLightboxImage] = useState(null); // For image lightbox
-  const [avatarPreview, setAvatarPreview] = useState(null); // For avatar preview
-  const [imagesPreview, setImagesPreview] = useState([]); // For images preview
+  const [activeSection, setActiveSection] = useState(null);
+  const [editingSection, setEditingSection] = useState(null);
+  const [editingAnswers, setEditingAnswers] = useState({});
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(null);
+  const [imagesPreview, setImagesPreview] = useState([]);
+  const fileInputRef = useRef(null);
 
   const COLORS = {
     primary: "#FF6B6B",
@@ -30,7 +31,7 @@ const ProfileQuestionnaire = () => {
     light: "#F7FFF7",
   };
 
-  const GEMINI_API_KEY = "AIzaSyDNx2mtOjxSDwZJZYX0qy5xd1siB55OQY8"; // Replace with your actual key
+  const GEMINI_API_KEY = "AIzaSyDNx2mtOjxSDwZJZYX0qy5xd1siB55OQY8";
 
   const sections = [
     {
@@ -319,6 +320,13 @@ const ProfileQuestionnaire = () => {
     fetchProfile();
   }, []);
 
+  useEffect(() => {
+    // Reset file input when changing questions
+    if (fileInputRef.current) {
+      fileInputRef.current.value = null;
+    }
+  }, [currentQuestion, currentSection]);
+
   const generateInsights = async (profile) => {
     try {
       const prompt = `
@@ -358,6 +366,9 @@ const ProfileQuestionnaire = () => {
     setAnswers({ ...answers, [questionId]: value });
     if (questionId === "avatar" && value) {
       setAvatarPreview(URL.createObjectURL(value));
+      if (currentQuestionData.id === "avatar") {
+        setImagesPreview([]);
+      }
     } else if (questionId === "images" && value) {
       setImagesPreview(value.map(file => URL.createObjectURL(file)));
     }
@@ -374,7 +385,7 @@ const ProfileQuestionnaire = () => {
 
   const startEditing = (sectionIndex) => {
     setEditingSection(sectionIndex);
-    setEditingAnswers({ ...profileData }); // Initialize with current profile data
+    setEditingAnswers({ ...profileData });
   };
 
   const cancelEditing = () => {
@@ -430,9 +441,6 @@ const ProfileQuestionnaire = () => {
     }
   };
 
-  const currentSectionData = sections[currentSection];
-  const currentQuestionData = currentSectionData?.questions[currentQuestion];
-
   const nextQuestion = () => {
     if (currentQuestionData.required && !answers[currentQuestionData.id] && !profileData?.[currentQuestionData.id]) return;
     if (
@@ -441,6 +449,15 @@ const ProfileQuestionnaire = () => {
       answers[currentQuestionData.id] &&
       (answers[currentQuestionData.id].length < currentQuestionData.min || answers[currentQuestionData.id].length > currentQuestionData.max)
     ) return;
+
+    if (
+      currentSection === sections.length - 1 &&
+      currentQuestion === 0 &&
+      currentQuestionData.id === "avatar"
+    ) {
+      setImagesPreview([]);
+    }
+
     if (currentQuestion < currentSectionData.questions.length - 1) {
       setCurrentQuestion(currentQuestion + 1);
       setShowHints(false);
@@ -507,6 +524,9 @@ const ProfileQuestionnaire = () => {
       setLoading(false);
     }
   };
+
+  const currentSectionData = sections[currentSection];
+  const currentQuestionData = currentSectionData?.questions[currentQuestion];
 
   const renderQuestion = () => {
     if (!currentQuestionData) return null;
@@ -664,6 +684,7 @@ const ProfileQuestionnaire = () => {
           >
             <input
               type="file"
+              ref={fileInputRef}
               multiple={currentQuestionData.multiple}
               accept={currentQuestionData.accept}
               className="w-full p-5 text-lg bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all font-bold hover:scale-105"
@@ -674,11 +695,14 @@ const ProfileQuestionnaire = () => {
                     alert(`Please upload between ${currentQuestionData.min} and ${currentQuestionData.max} images!`);
                     return;
                   }
-                } else if (files.length > currentQuestionData.max) {
-                  alert("Please upload only one avatar image!");
-                  return;
+                  handleAnswerChange(currentQuestionData.id, files);
+                } else {
+                  if (files.length > currentQuestionData.max) {
+                    alert("Please upload only one avatar image!");
+                    return;
+                  }
+                  handleAnswerChange(currentQuestionData.id, files[0]);
                 }
-                handleAnswerChange(currentQuestionData.id, currentQuestionData.multiple ? files : files[0]);
               }}
               style={{ transform: "rotate(-1deg)" }}
             />
@@ -702,7 +726,7 @@ const ProfileQuestionnaire = () => {
                 />
               </motion.div>
             )}
-            {currentQuestionData.id === "images" && (imagesPreview.length > 0 || profileData?.images) && (
+            {currentQuestionData.id === "images" && imagesPreview.length > 0 && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -711,7 +735,7 @@ const ProfileQuestionnaire = () => {
               >
                 <p className="text-sm font-bold">Images Preview:</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {(imagesPreview.length > 0 ? imagesPreview : profileData?.images || []).map((url, index) => (
+                  {imagesPreview.map((url, index) => (
                     <motion.img
                       key={index}
                       whileHover={{ scale: 1.1 }}
@@ -735,10 +759,8 @@ const ProfileQuestionnaire = () => {
     if (!profileData) return null;
 
     return (
-      
       <div className="min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100 p-6 flex items-center justify-center">
         <div className="w-full max-w-5xl">
-          {/* Header */}
           <motion.div
             initial={{ opacity: 0, y: -50 }}
             animate={{ opacity: 1, y: 0 }}
@@ -754,9 +776,7 @@ const ProfileQuestionnaire = () => {
             <div className="mt-2 h-2 bg-black" style={{ width: "100px" }}></div>
           </motion.div>
 
-          {/* Main Content */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Avatar and Images */}
             <motion.div
               initial={{ opacity: 0, x: -50 }}
               animate={{ opacity: 1, x: 0 }}
@@ -936,7 +956,6 @@ const ProfileQuestionnaire = () => {
               )}
             </motion.div>
 
-            {/* Profile Details with Accordion */}
             <motion.div
               initial={{ opacity: 0, x: 50 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1109,25 +1128,24 @@ const ProfileQuestionnaire = () => {
                 </div>
               ))}
               <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
-              className="mt-6"
-            >
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => (window.location.href = "/dashboard")}
-                className="w-full bg-black text-white py-4 px-6 text-xl font-black uppercase tracking-tight border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,107,107,1)] hover:shadow-[8px_8px_0px_0px_rgba(255,107,107,1)] hover:translate-y-[-4px] transition-all"
-                style={{ transform: "rotate(1deg)" }}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                className="mt-6"
               >
-                GO TO DASHBOARD ✨
-              </motion.button>
-            </motion.div>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => (window.location.href = "/dashboard")}
+                  className="w-full bg-black text-white py-4 px-6 text-xl font-black uppercase tracking-tight border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,107,107,1)] hover:shadow-[8px_8px_0px_0px_rgba(255,107,107,1)] hover:translate-y-[-4px] transition-all"
+                  style={{ transform: "rotate(1deg)" }}
+                >
+                  GO TO DASHBOARD ✨
+                </motion.button>
+              </motion.div>
             </motion.div>
           </div>
         </div>
-        {/* Lightbox for Images */}
         <AnimatePresence>
           {lightboxImage && (
             <motion.div
