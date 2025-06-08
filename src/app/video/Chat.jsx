@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
@@ -139,8 +138,8 @@ const Chat = () => {
       setShowContinuePrompt(false);
     });
 
-    newSocket.on("paired", async ({ message, sessionId: newSessionId }) => {
-      console.log("Paired with new session:", newSessionId);
+    newSocket.on("paired", async ({ message, sessionId: newSessionId, role }) => {
+      console.log("Paired with new session:", newSessionId, "Role:", role);
       await cleanupVideoCall();
       setSessionId(newSessionId);
       currentSessionIdRef.current = newSessionId;
@@ -152,9 +151,11 @@ const Chat = () => {
 
       await ensureLocalStream();
 
-      setTimeout(() => {
-        startVideoCall(newSocket, newSessionId);
-      }, 1000);
+      if (role === "offerer") {
+        setTimeout(() => {
+          startVideoCall(newSocket, newSessionId);
+        }, 1000);
+      }
     });
 
     newSocket.on("message", ({ text, from }) => {
@@ -223,15 +224,21 @@ const Chat = () => {
       }
 
       try {
-        await cleanupVideoCall();
-        await ensureLocalStream();
+        if (!peerConnectionRef.current) {
+          await ensureLocalStream();
+          peerConnectionRef.current = createPeerConnection(newSocket, offerSessionId);
+        }
 
-        const pc = createPeerConnection(newSocket, offerSessionId);
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        newSocket.emit("answer", { answer, sessionId: offerSessionId });
-        processQueuedIceCandidates();
+        const pc = peerConnectionRef.current;
+        if (pc.signalingState === "stable") {
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          newSocket.emit("answer", { answer, sessionId: offerSessionId });
+          processQueuedIceCandidates();
+        } else {
+          console.warn("Cannot process offer; signaling state:", pc.signalingState);
+        }
       } catch (error) {
         console.error("Error handling offer:", error);
         setStatus("Video connection failed - try next match");
@@ -246,11 +253,12 @@ const Chat = () => {
       }
 
       try {
-        if (peerConnectionRef.current.signalingState === "have-local-offer") {
-          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        const pc = peerConnectionRef.current;
+        if (pc.signalingState === "have-local-offer") {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
           processQueuedIceCandidates();
         } else {
-          console.warn("Peer connection in wrong state:", peerConnectionRef.current.signalingState);
+          console.warn("Cannot process answer; signaling state:", pc.signalingState);
         }
       } catch (error) {
         console.error("Error handling answer:", error);
@@ -260,6 +268,7 @@ const Chat = () => {
 
     newSocket.on("ice-candidate", async ({ candidate, sessionId: candidateSessionId }) => {
       if (candidateSessionId !== currentSessionIdRef.current) {
+        console.warn("Ignoring ICE candidate for wrong session:", candidateSessionId);
         return;
       }
 
@@ -267,8 +276,10 @@ const Chat = () => {
         try {
           if (peerConnectionRef.current.remoteDescription) {
             await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log("Added ICE candidate:", candidate);
           } else {
             iceCandidatesQueueRef.current.push(candidate);
+            console.log("Queued ICE candidate:", candidate);
           }
         } catch (error) {
           console.error("Error adding ICE candidate:", error);
@@ -315,6 +326,12 @@ const Chat = () => {
         { urls: "stun:stun2.l.google.com:19302" },
         { urls: "stun:stun3.l.google.com:19302" },
         { urls: "stun:stun4.l.google.com:19302" },
+        // Add TURN server here if available
+        // {
+        //   urls: "turn:your-turn-server-url",
+        //   username: "your-turn-username",
+        //   credential: "your-turn-credential",
+        // },
       ],
       iceCandidatePoolSize: 10,
     });
@@ -337,6 +354,7 @@ const Chat = () => {
           break;
         case "failed":
           setStatus("Connection failed - click Next to try again");
+          nextChat();
           break;
         case "closed":
           setStatus("Disconnected");
@@ -348,15 +366,15 @@ const Chat = () => {
       console.log("Received remote track");
       if (remoteVideoRef.current && event.streams[0]) {
         const [remoteStream] = event.streams;
-        if (remoteVideoRef.current.srcObject !== remoteStream) {
-          remoteVideoRef.current.srcObject = remoteStream;
-          remoteVideoRef.current.play().catch((e) => {
-            console.error("Error playing remote video:", e);
-            setTimeout(() => {
-              remoteVideoRef.current?.play().catch(console.error);
-            }, 1000);
-          });
-        }
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play().catch((e) => {
+          console.error("Error playing remote video:", e);
+          setTimeout(() => {
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.play().catch((err) => console.error("Retry play failed:", err));
+            }
+          }, 1000);
+        });
       }
     };
 
@@ -505,7 +523,7 @@ const Chat = () => {
   };
 
   const handleContinueResponse = (continueChat) => {
-    if (socket && sessionId) {
+    if (socket && sessionId && sessionId === currentSessionIdRef.current) {
       socket.emit("continue_response", { sessionId, continueChat });
       setShowContinuePrompt(false);
       setStatus("Waiting for other user's response...");
@@ -625,6 +643,7 @@ const Chat = () => {
                   playsInline
                   muted
                   className="w-full h-72 bg-black rounded-none object-cover"
+                  onError={(e) => console.error("Local video error:", e)}
                 />
               </CardContent>
             </Card>
@@ -638,6 +657,7 @@ const Chat = () => {
                   autoPlay
                   playsInline
                   className="w-full h-72 bg-black rounded-none object-cover"
+                  onError={(e) => console.error("Remote video error:", e)}
                 />
               </CardContent>
             </Card>
@@ -671,7 +691,7 @@ const Chat = () => {
                 <AnimatePresence>
                   {!loading &&
                     chat.map((msg, idx) => (
-                      <motion.div
+                      <motion.div>
                         key={idx}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -681,7 +701,6 @@ const Chat = () => {
                             ? "ml-auto bg-pink-300 shadow-[2px_2px_0_0_#000]"
                             : "mr-auto bg-white shadow-[2px_2px_0_0_#000]"
                         }`}
-                      >
                         <div className="flex justify-between items-start">
                           <strong>{msg.from === "me" ? "You" : "Stranger"}:</strong>
                           <span className="text-xs text-gray-600 ml-2">
